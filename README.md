@@ -1,4 +1,7 @@
-# Drone PWS - Thermal Forest Fire Detection
+# Sauron — Drone PWS - Thermal Forest Fire Detection
+
+**Formal title:** Bosbrand detectie drone (PWS).  
+**Informal name:** Sauron.
 
 Short project description (edit me).
 

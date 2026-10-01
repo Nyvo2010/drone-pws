@@ -5,5 +5,6 @@ Durable project-specific knowledge. Add facts a future contributor
 
 ## Entries
 
+- 2026-10-01: Project codename Sauron (formal PWS: Bosbrand detectie drone). Drone for thermal forest fire detection.
 - 2026-10-01: Hardware: ESP32-S3 Cam Edition will be connected to laptop to control RGB and thermal/warmth camera for forest fire detection drone PWS.
 
