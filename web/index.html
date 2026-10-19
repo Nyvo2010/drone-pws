@@ -2,824 +2,1061 @@
 <html lang="nl">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=100%, initial-scale=1">
-<title>Sauron</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Mozilla+Headline:wght@700&display=swap" rel="stylesheet">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0b0b0d">
+<title>Sauron — bosbranddetectie</title>
 <style>
   :root {
-    --bg: #0a0a0b;
-    --panel: #111113;
-    --panel2: #0d0d0f;
-    --border: #2a2a2e;
-    --text: #e4e4e7;
-    --muted: #6b6b70;
-    --dim: #4a4a4e;
-    --accent: #ff6b4a;
-    --good: #30d158;
-    --mono: "JetBrains Mono", "SF Mono", Menlo, monospace;
-    --display: "Mozilla Headline", -apple-system, sans-serif;
+    --bg: #0b0b0d;
+    --panel: #121214;
+    --panel2: #18181b;
+    --ink: #ececef;
+    --body: #b9b9c0;
+    --mute: #7c7c85;
+    --dim: #55555e;
+    --hair: rgba(255, 255, 255, .09);
+    --hair-strong: rgba(255, 255, 255, .2);
+    --danger: #ff453a;
+    --success: #32d74b;
+    --warning: #ff9f0a;
+    --mono: ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Monaco,
+            Consolas, "Liberation Mono", "Courier New", monospace;
   }
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
 
-  html, body {
+  html, body { height: 100%; }
+
+  body {
     background: var(--bg);
-    color: var(--text);
+    color: var(--ink);
     font-family: var(--mono);
     font-size: 13px;
     line-height: 1.45;
     -webkit-font-smoothing: antialiased;
+    overflow: hidden;
   }
 
-  /* ===== Header: alleen logo, compact ===== */
-  header {
+  button { font: inherit; color: inherit; }
+
+  .app {
+    height: 100dvh;
     display: flex;
-    align-items: center;
-    padding: 0 24px;
+    flex-direction: column;
+  }
+
+  /* ---------- header ---------- */
+  .top {
+    flex: 0 0 auto;
     height: 48px;
-    background: var(--panel2);
-    border-bottom: 1px solid var(--border);
-  }
-
-  .logo h1 {
-    font-family: var(--display);
-    font-weight: 700;
-    font-size: 20px;
-    letter-spacing: -0.5px;
-    color: #fff;
-  }
-
-  /* status tucked right */
-  .topbar {
-    margin-left: auto;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-  }
-
-  .status-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 4px 11px;
-    border-radius: 980px;
-    font-size: 10px;
-    font-weight: 500;
-    color: var(--muted);
-    background: rgba(255,255,255,0.03);
-    border: 1px solid var(--border);
-    white-space: nowrap;
-  }
-
-  .status-pill.live {
-    color: var(--good);
-    border-color: rgba(48,209,88,0.25);
-    background: rgba(48,209,88,0.07);
-  }
-
-  .status-pill .dot {
-    width: 6px; height: 6px;
-    border-radius: 50%;
-    background: currentColor;
-    box-shadow: 0 0 6px currentColor;
-    animation: pulse 2s ease-in-out infinite;
-  }
-
-  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
-
-  /* ===== Layout: full width ===== */
-  main {
-    padding: 16px 24px 24px;
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    grid-template-rows: 1fr 1fr;
-    gap: 1px;
-    background: var(--border);
-  }
-
-  /* Camera-cell (bovenste rij, beide kanten) */
-  .cam-cell {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    padding: 14px 16px;
-    background: var(--panel);
-    overflow: hidden;
-  }
-
-  .cam-label {
+    padding: 0 14px;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
-    font-size: 10px;
-    font-weight: 500;
-    color: var(--muted);
-    text-transform: uppercase;
-    letter-spacing: 0.7px;
-  }
-
-  .cam-label .hint {
-    color: var(--dim);
-    text-transform: none;
-    letter-spacing: 0;
-    font-weight: 400;
-    font-family: var(--mono);
-    font-size: 10px;
-  }
-
-  .cam-frame {
-    position: relative;
-    background: #000;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    overflow: hidden;
-    aspect-ratio: 4 / 3;
-    flex-shrink: 0;
-  }
-
-  .cam-frame img,
-  .cam-frame canvas {
-    width: 100%; height: 100%;
-    object-fit: contain;
-    display: block;
-    image-rendering: pixelated;
-  }
-
-  .cam-fallback {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--dim);
-    font-size: 11px;
-    text-align: center;
-    padding: 16px;
-  }
-
-  .cam-meta {
-    display: flex;
     gap: 16px;
-    font-size: 10px;
-    color: var(--muted);
-    flex-wrap: wrap;
+    border-bottom: 1px solid var(--hair-strong);
   }
 
-  .cam-meta span { display: inline-flex; align-items: center; gap: 4px; }
-  .cam-meta .v { color: var(--text); font-weight: 500; }
-  .cam-meta .hot { color: var(--accent); font-weight: 600; }
-
-  /* ===== Rechter kolom onder: branden ===== */
-  .brand-cell {
-    padding: 14px 16px;
-    background: var(--panel);
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    overflow: hidden;
+  .top .name {
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: .24em;
   }
 
-  .brand-cell h2 {
-    font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
-    font-size: 10px;
-    font-weight: 500;
-    color: var(--muted);
-    text-transform: uppercase;
-    letter-spacing: 0.7px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
+  .head-right { display: flex; align-items: center; gap: 12px; }
 
-  .badge {
-    font-family: var(--mono);
-    font-size: 10px;
-    padding: 2px 8px;
-    border-radius: 980px;
-    background: rgba(255,255,255,0.03);
-    color: var(--muted);
-    border: 1px solid var(--border);
-    white-space: nowrap;
-  }
+  #new-flight { padding: 4px 10px; }
 
-  .badge.alert {
-    color: var(--accent);
-    border-color: rgba(255,107,74,0.25);
-    background: rgba(255,107,74,0.07);
-  }
-
-  .badge.ok {
-    color: var(--good);
-    border-color: rgba(48,209,88,0.25);
-    background: rgba(48,209,88,0.07);
-  }
-
-  .brand-list {
-    overflow-y: auto;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    max-height: 180px;
-    scrollbar-width: thin;
-    scrollbar-color: var(--border) transparent;
-  }
-
-  .brand-list::-webkit-scrollbar { width: 4px; }
-  .brand-list::-webkit-scrollbar-track { background: transparent; }
-  .brand-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-
-  .brand {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 8px 10px;
-    background: var(--panel2);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    cursor: pointer;
-    transition: border-color 120ms ease, background 120ms ease;
-  }
-
-  .brand:hover { border-color: var(--accent); background: rgba(255,107,74,0.04); }
-  .brand.active { border-color: var(--accent); background: rgba(255,107,74,0.08); }
-  .brand.new { animation: in 350ms ease-out; }
-
-  @keyframes in { from { opacity:0; transform:translateY(-2px) } to { opacity:1; transform:none } }
-
-  .brand .left {
+  /* ---------- warning strip ---------- */
+  .warning {
+    flex: 0 0 auto;
     display: flex;
     align-items: baseline;
     gap: 8px;
-    min-width: 0;
-  }
-
-  .brand .id {
-    font-size: 9px;
-    color: var(--dim);
-    text-transform: uppercase;
-    letter-spacing: 0.4px;
-    flex-shrink: 0;
-  }
-
-  .brand .temp {
-    font-size: 18px;
-    font-weight: 600;
-    color: var(--accent);
-    letter-spacing: -0.5px;
-    flex-shrink: 0;
-  }
-
-  .brand .temp .u {
-    font-size: 10px;
-    color: var(--muted);
-    font-weight: 400;
-    margin-left: 1px;
-  }
-
-  .brand .loc {
+    padding: 7px 16px;
+    border-bottom: 1px solid rgba(255, 159, 10, .35);
+    background: rgba(255, 159, 10, .07);
+    color: var(--warning);
     font-size: 11px;
-    color: var(--text);
-    font-weight: 500;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
+  .warning[hidden] { display: none; }
+  .warning .tag { font-weight: 600; }
 
-  .brand .dist {
-    font-size: 9px;
-    color: var(--dim);
-    margin-left: auto;
-    flex-shrink: 0;
-  }
-
-  /* ===== Expand box (detached, rechtsonder of overlay) ===== */
-  .expand {
-    position: fixed;
-    right: 24px;
-    bottom: 24px;
-    width: 320px;
-    background: var(--panel);
-    border: 1px solid var(--accent);
-    border-radius: 10px;
-    padding: 14px;
-    z-index: 20;
-    box-shadow: 0 8px 32px rgba(0,0,0,0.6);
-    display: none;
+  /* ---------- layout: cameras on top, results below ---------- */
+  main {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
     flex-direction: column;
     gap: 10px;
+    padding: 10px;
   }
 
-  .expand.open { display: flex; animation: pop 180ms ease-out; }
-
-  @keyframes pop { from { opacity:0; transform:translateY(6px) scale(0.97) } to { opacity:1; transform:none } }
-
-  .expand .x {
-    position: absolute;
-    top: 8px;
-    right: 8px;
-    width: 20px; height: 20px;
+  .camrow {
+    flex: 1.45 1 0;
+    min-height: 0;
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: 4px;
-    background: rgba(255,255,255,0.04);
-    color: var(--muted);
-    cursor: pointer;
-    font-size: 14px;
-    line-height: 1;
-  }
-
-  .expand .x:hover { background: rgba(255,255,255,0.08); color: var(--text); }
-
-  .expand h3 {
-    font-family: var(--display);
-    font-size: 16px;
-    color: var(--accent);
-    letter-spacing: -0.3px;
-    margin: 0;
-  }
-
-  .expand .row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    font-size: 11px;
-    color: var(--muted);
-    gap: 12px;
-  }
-
-  .expand .row .k { color: var(--dim); text-transform: uppercase; letter-spacing: 0.4px; font-size: 9px; }
-  .expand .row .v { color: var(--text); font-weight: 500; text-align: right; }
-  .expand .row .v.hot { color: var(--accent); font-weight: 600; }
-
-  .expand .time {
-    font-size: 10px;
-    color: var(--dim);
-    border-top: 1px solid var(--border);
-    padding-top: 8px;
-    margin-top: 2px;
-  }
-
-  /* ===== Linker kolom onder: drone + logs ===== */
-  .left-bottom {
-    display: grid;
-    grid-template-rows: 1fr auto;
-    gap: 1px;
-    background: var(--border);
-    overflow: hidden;
-  }
-
-  .drone-cell {
-    padding: 14px 16px;
-    background: var(--panel);
-    display: flex;
-    flex-direction: column;
     gap: 10px;
+  }
+
+  .resultrow {
+    flex: 1 1 0;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .panel {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    background: var(--panel);
+    border: 1px solid var(--hair);
+    border-radius: 0;
     overflow: hidden;
   }
 
-  .drone-cell h2 {
-    font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
-    font-size: 10px;
-    font-weight: 500;
-    color: var(--muted);
-    text-transform: uppercase;
-    letter-spacing: 0.7px;
+  .camrow .panel.camera { flex: 0 0 auto; }
+
+  .phead {
+    flex: 0 0 auto;
+    height: 32px;
+    padding: 0 11px;
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 10px;
+    border-bottom: 1px solid var(--hair);
   }
 
-  .drone-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
-    gap: 1px;
-    background: var(--border);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    overflow: hidden;
-    flex: 1;
+  .phead .label {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--ink);
+    white-space: nowrap;
+  }
+  .phead .label .br { color: var(--dim); font-weight: 400; }
+
+  .phead .meta {
+    font-size: 10px;
+    color: var(--mute);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+  .phead .meta.alert { color: var(--danger); }
+
+  .status {
+    flex-shrink: 0;
+    font-size: 9px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    padding: 3px 7px;
+    border: 1px solid var(--hair);
+    border-radius: 4px;
+    white-space: nowrap;
+  }
+  .status.live { color: var(--success); border-color: rgba(50, 215, 75, .35); }
+  .status.stale { color: var(--warning); border-color: rgba(255, 159, 10, .4); }
+  .status.idle { color: var(--mute); }
+
+  .camera-body {
+    flex: 1 1 auto;
     min-height: 0;
+    display: flex;
+    padding: 8px;
   }
 
-  .dcell {
-    background: var(--panel2);
-    padding: 8px 10px;
+  .frame {
+    position: relative;
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+    background: #060607;
+    border: 1px solid var(--hair);
+    overflow: hidden;
+  }
+
+  .frame-empty {
+    position: absolute;
+    inset: 0;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 16px;
+    text-align: center;
+    font-size: 11px;
+    color: var(--mute);
+  }
+  .frame-empty[hidden] { display: none; }
+  .frame-empty .u { font-size: 10px; color: var(--dim); }
+
+  #thermal {
+    display: block;
+    width: 100%;
+    height: 100%;
+    image-rendering: pixelated;
+  }
+
+  #rgb {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 7px;
+    border: 1px solid var(--hair);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--body);
+    font-size: 10px;
+    cursor: pointer;
+    transition: background 120ms ease, border-color 120ms ease;
+  }
+  .btn:hover { background: var(--panel2); border-color: var(--hair-strong); }
+  .btn:active { background: #202024; }
+
+  /* ---------- telemetry ---------- */
+  .tbody {
+    flex: 1 1 auto;
     min-height: 0;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
   }
 
-  .dcell .lbl {
-    font-size: 8px;
+  .tele-body { padding: 10px 12px; gap: 6px; overflow-y: auto; }
+
+  .agl-hero {
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--hair);
+  }
+  .hero-num {
+    font-size: 30px;
+    font-weight: 700;
+    letter-spacing: -.02em;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+  .hero-num.warn { color: var(--warning); }
+  .hero-unit {
+    font-size: 9px;
+    letter-spacing: .1em;
     text-transform: uppercase;
-    letter-spacing: 0.4px;
-    color: var(--dim);
+    color: var(--mute);
+  }
+  .hero-sub {
+    margin-left: auto;
+    font-size: 10px;
+    color: var(--mute);
+    font-variant-numeric: tabular-nums;
   }
 
-  .dcell .val {
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--text);
-    letter-spacing: -0.2px;
+  .kv { display: flex; flex-direction: column; }
+  .kv > div {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 3px 0;
+    border-bottom: 1px solid var(--hair);
+  }
+  .kv dt {
+    font-size: 9px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--mute);
+    white-space: nowrap;
+  }
+  .kv dd {
+    font-size: 11px;
+    color: var(--ink);
+    font-variant-numeric: tabular-nums;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
 
-  .dcell .val.sm { font-size: 11px; color: var(--muted); font-weight: 400; }
-  .dcell .val.accent { color: var(--accent); }
-  .dcell .val.good { color: var(--good); }
-
-  /* ===== Logs (onderin linker kolom) ===== */
-  .logs-cell {
-    padding: 10px 16px;
-    background: var(--panel);
+  .sysrow {
     display: flex;
-    flex-direction: column;
+    flex-wrap: wrap;
     gap: 6px;
-    overflow: hidden;
+    margin-top: auto;
+    padding-top: 5px;
   }
-
-  .logs-cell h2 {
-    font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
-    font-size: 10px;
-    font-weight: 500;
-    color: var(--muted);
+  .sysrow .chip {
+    font-size: 9px;
+    letter-spacing: .06em;
     text-transform: uppercase;
-    letter-spacing: 0.7px;
+    color: var(--mute);
+    border: 1px solid var(--hair);
+    border-radius: 4px;
+    padding: 2px 6px;
   }
+  .sysrow .chip.on { color: var(--warning); border-color: rgba(255, 159, 10, .35); }
 
-  .log-box {
+  /* ---------- fires ---------- */
+  .fire-body { padding: 4px; }
+
+  .fire-list {
+    flex: 1 1 auto;
+    min-height: 0;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
-    font-size: 10px;
-    scrollbar-width: thin;
-    scrollbar-color: var(--border) transparent;
-    max-height: 100px;
+    gap: 4px;
   }
 
-  .log-box::-webkit-scrollbar { width: 4px; }
-  .log-box::-webkit-scrollbar-track { background: transparent; }
-  .log-box::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-
-  .log-line {
-    padding: 3px 0;
-    border-bottom: 1px solid rgba(42,42,46,0.3);
-    animation: in 120ms ease-out;
-    display: flex;
-    gap: 8px;
+  .empty {
+    padding: 24px 12px;
+    text-align: center;
+    font-size: 11px;
+    color: var(--mute);
   }
 
-  .log-line .t {
-    color: var(--dim);
+  .fire {
+    flex: 0 0 auto;
+    border: 1px solid transparent;
+    border-radius: 4px;
+  }
+  .fire.open { background: var(--panel2); border-color: var(--hair); }
+  .fire.lost { opacity: .62; }
+  .fire.lost .ftemp { color: var(--mute); }
+  .fire.lost .fid { color: var(--dim); }
+
+  .fire-head {
+    width: 100%;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 9px;
+    padding: 8px;
+    background: transparent;
+    border: 0;
+    border-radius: 4px;
+    text-align: left;
+    cursor: pointer;
+  }
+  .fire-head:hover { background: var(--panel2); }
+  .fire.open .fire-head:hover { background: transparent; }
+
+  .fid {
     font-size: 9px;
-    flex-shrink: 0;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--mute);
+    white-space: nowrap;
+  }
+  .fid .mark { color: var(--danger); }
+
+  .fmain { min-width: 0; display: flex; align-items: baseline; gap: 8px; }
+  .ftemp {
+    font-size: 21px;
+    font-weight: 600;
+    line-height: 1.05;
+    color: var(--danger);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .ftemp .u { font-size: 10px; font-weight: 400; color: var(--mute); }
+  .fmeta {
+    font-size: 10px;
+    color: var(--body);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-variant-numeric: tabular-nums;
+  }
+  .fdist {
+    font-size: 10px;
+    color: var(--mute);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
   }
 
-  .log-line.fire { color: var(--accent); }
-  .log-empty { color: var(--dim); padding: 6px 0; text-align: center; font-size: 10px; }
+  .fire-detail {
+    padding: 6px 8px 8px;
+    border-top: 1px solid var(--hair);
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2px 14px;
+  }
+  .fire-detail[hidden] { display: none; }
 
-  /* ===== Battery / modus bar (tussen cameras en onder) ===== */
-  .sysbar {
+  .fd {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 10px;
+    padding: 1px 0;
+  }
+  .fd .k { color: var(--mute); }
+  .fd .v { color: var(--ink); font-variant-numeric: tabular-nums; }
+
+  .reasons {
     grid-column: 1 / -1;
     display: flex;
-    align-items: center;
-    gap: 24px;
-    padding: 0 16px;
-    height: 36px;
-    background: var(--panel2);
-    border-top: 1px solid var(--border);
-    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+    gap: 4px 12px;
+    margin-top: 5px;
+    font-size: 9px;
+    letter-spacing: .04em;
+    color: var(--dim);
   }
+  .reasons .ok { color: var(--success); }
 
-  .sysbar .item {
+  .fire-actions {
+    grid-column: 1 / -1;
     display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 10px;
-    color: var(--muted);
+    justify-content: flex-end;
+    margin-top: 5px;
   }
 
-  .sysbar .item .k { color: var(--dim); text-transform: uppercase; letter-spacing: 0.4px; font-size: 9px; }
-  .sysbar .item .v { color: var(--text); font-weight: 500; }
-  .sysbar .item .v.good { color: var(--good); }
-  .sysbar .item .v.accent { color: var(--accent); }
+  /* ---------- logs ---------- */
+  .log-body { padding: 4px 0 5px; }
 
-  .sysbar .spacer { flex: 1; }
+  .log-box {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0 11px;
+    font-size: 11px;
+    line-height: 1.55;
+  }
 
-  /* ===== Responsive (smallere schermen) ===== */
-  @media (max-width: 900px) {
-    main { grid-template-columns: 1fr; grid-template-rows: auto auto auto auto; }
-    .cam-cell { grid-row: 1 / 3; }
-    .left-bottom { grid-column: 1; grid-row: 3; }
-    .brand-cell { grid-column: 1; grid-row: 4; }
-    .sysbar { grid-column: 1; }
-    .expand { right: 12px; bottom: 12px; width: 280px; }
+  .log-line {
+    display: grid;
+    grid-template-columns: 50px 15px minmax(0, 1fr);
+    gap: 5px;
+    padding: 3px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, .05);
+  }
+  .log-line .t {
+    font-size: 9px;
+    color: var(--dim);
+    font-variant-numeric: tabular-nums;
+  }
+  .log-line .tag { font-size: 10px; color: var(--dim); }
+  .log-line .m { color: var(--body); overflow-wrap: anywhere; }
+  .log-line.fire .tag,
+  .log-line.fire .m { color: var(--danger); }
+
+  /* scrollbars */
+  .fire-list, .log-box, .tele-body {
+    scrollbar-width: thin;
+    scrollbar-color: var(--hair) transparent;
+  }
+  .fire-list::-webkit-scrollbar,
+  .log-box::-webkit-scrollbar,
+  .tele-body::-webkit-scrollbar { width: 4px; }
+  .fire-list::-webkit-scrollbar-thumb,
+  .log-box::-webkit-scrollbar-thumb,
+  .tele-body::-webkit-scrollbar-thumb {
+    background: var(--hair);
+    border-radius: 2px;
+  }
+
+  /* ---------- responsive ---------- */
+  @media (max-width: 1100px) {
+    .resultrow { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+    .logs { grid-column: 1 / -1; }
+  }
+
+  @media (max-width: 760px) {
+    html, body { height: auto; overflow: auto; }
+    .app { height: auto; min-height: 100dvh; }
+    .top { height: auto; padding: 8px 12px; flex-wrap: wrap; gap: 8px; }
+    main { padding: 8px; gap: 8px; }
+    .camrow { flex: 0 0 auto; flex-direction: column; align-items: stretch; }
+    .camrow .panel.camera { width: 100%; height: auto; }
+    .camera-body { display: block; }
+    .camera-body .frame { width: 100%; height: auto; aspect-ratio: 4 / 3; }
+    .camera.rgb .frame { aspect-ratio: 16 / 9; }
+    .resultrow { flex: 0 0 auto; display: flex; flex-direction: column; gap: 8px; }
+    .fires { min-height: 340px; }
+    .telemetry { min-height: 320px; }
+    .logs { min-height: 240px; }
   }
 
   @media (prefers-reduced-motion: reduce) {
-    *, *::before, *::after { animation-duration: 0.01ms !important; transition: none !important; }
+    *, *::before, *::after {
+      animation-duration: .01ms !important;
+      transition: none !important;
+    }
   }
 </style>
 </head>
 <body>
-<header>
-  <div class="logo">
-    <h1>Sauron</h1>
-  </div>
-  <div class="topbar">
-    <div class="status-pill" id="status">
-      <span class="dot"></span>
-      <span id="status-text">verbinden…</span>
+<div class="app">
+  <header class="top">
+    <span class="name">SAURON</span>
+    <div class="head-right">
+      <span class="status idle" id="status" role="status" aria-live="polite">[ ] niet verbonden</span>
+      <button class="btn" id="new-flight" type="button">[nieuwe vlucht]</button>
     </div>
-  </div>
-</header>
+  </header>
 
-<main>
-  <!-- Cameras: beide boven, full width -->
-  <div class="cam-cell">
-    <div class="cam-label">
-      <span>RGB · vooruitkijk</span>
-      <span class="hint">ESP32 stream</span>
-    </div>
-    <div class="cam-frame">
-      <img id="rgb" alt="" src="">
-      <div class="cam-fallback" id="rgb-fb" style="display:none">geen RGB-verbinding</div>
-    </div>
+  <div class="warning" id="warning" hidden>
+    <span class="tag">[!]</span>
+    <span id="warning-text"></span>
   </div>
 
-  <div class="cam-cell">
-    <div class="cam-label">
-      <span>Thermal · omlaag 32×24</span>
-      <span class="hint">MLX90640</span>
-    </div>
-    <div class="cam-frame">
-      <canvas id="thermal" width="128" height="96"></canvas>
-    </div>
-    <div class="cam-meta">
-      <span>max <span class="v hot" id="t-max">—</span>°C</span>
-      <span>omgeving <span class="v" id="t-amb">—</span>°C</span>
-      <span>drempel <span class="v" id="t-thr">—</span>°C</span>
-    </div>
-  </div>
+  <main>
+    <!-- cameras: boxes sized to their native aspect ratios -->
+    <div class="camrow" id="camrow">
+      <section class="panel camera thermal" id="thermal-panel" aria-labelledby="thermal-title">
+        <div class="phead">
+          <span class="label" id="thermal-title"><span class="br">[+]</span> thermisch</span>
+          <span class="meta">MLX90640 · 32×24</span>
+        </div>
+        <div class="camera-body">
+          <div class="frame">
+            <canvas id="thermal" width="320" height="240"
+                    aria-label="Thermisch beeld, 32 bij 24 pixels"></canvas>
+            <div class="frame-empty" id="thermal-empty">[ ] geen thermisch frame</div>
+          </div>
+        </div>
+      </section>
 
-  <!-- System bar -->
-  <div class="sysbar">
-    <div class="item"><span class="k">batterij</span><span class="v" id="s-bat">—</span></div>
-    <div class="item"><span class="k">modus</span><span class="v" id="s-mode">—</span></div>
-    <div class="item"><span class="k">autonomie</span><span class="v" id="s-auto">UIT</span></div>
-    <div class="item"><span class="k">veld</span><span class="v" id="s-veld">5–30 m</span></div>
-    <div class="spacer"></div>
-    <div class="item"><span class="k"> AGL</span><span class="v" id="s-agl">—</span></div>
-    <div class="item"><span class="k">heading</span><span class="v" id="s-heading">—</span></div>
-  </div>
-
-  <!-- Linker kolom onder: drone + logs -->
-  <div class="left-bottom">
-    <div class="drone-cell">
-      <h2>
-        Drone
-        <span class="badge" id="drone-badge">—</span>
-      </h2>
-      <div class="drone-grid">
-        <div class="dcell"><span class="lbl">latitude</span><span class="val sm" id="d-lat">—</span></div>
-        <div class="dcell"><span class="lbl">longitude</span><span class="val sm" id="d-lon">—</span></div>
-        <div class="dcell"><span class="lbl">hoogte MSL</span><span class="val" id="d-alt-msl">—</span></div>
-        <div class="dcell"><span class="lbl">hoogte AGL</span><span class="val" id="d-alt-agl">—</span></div>
-        <div class="dcell"><span class="lbl">heading</span><span class="val sm" id="d-heading">—</span></div>
-        <div class="dcell"><span class="lbl">GPS-fix</span><span class="val sm" id="d-fix">—</span></div>
-        <div class="dcell"><span class="lbl">sats</span><span class="val sm" id="d-sats">—</span></div>
-        <div class="dcell"><span class="lbl">HDOP</span><span class="val sm" id="d-hdop">—</span></div>
-        <div class="dcell"><span class="lbl">warmte</span><span class="val sm" id="d-thermal">—</span></div>
-        <div class="dcell"><span class="lbl">pixels</span><span class="val sm" id="d-pixels">—</span></div>
-      </div>
+      <section class="panel camera rgb" id="rgb-panel" aria-labelledby="rgb-title">
+        <div class="phead">
+          <span class="label" id="rgb-title"><span class="br">[+]</span> rgb</span>
+          <span class="meta">
+            <button class="btn" id="rgb-reload" type="button" title="stream herladen">[↻]</button>
+          </span>
+        </div>
+        <div class="camera-body">
+          <div class="frame" id="rgb-frame">
+            <img id="rgb" alt="RGB-stream van de drone">
+            <div class="frame-empty" id="rgb-fb">
+              <span>[ ] geen RGB-stream</span>
+              <span class="u" id="rgb-url"></span>
+            </div>
+          </div>
+        </div>
+      </section>
     </div>
 
-    <div class="logs-cell">
-      <h2>Logboek <span class="badge" id="log-badge" style="margin-left:auto">0 entries</span></h2>
-      <div class="log-box" id="log-box">
-        <div class="log-empty">—</div>
-      </div>
-    </div>
-  </div>
+    <!-- results -->
+    <div class="resultrow">
+      <section class="panel fires" aria-labelledby="fires-title">
+        <div class="phead">
+          <span class="label" id="fires-title"><span class="br">[+]</span> branden</span>
+          <span class="meta" id="fires-badge">[0]</span>
+        </div>
+        <div class="tbody fire-body">
+          <div class="fire-list" id="fire-list"></div>
+        </div>
+      </section>
 
-  <!-- Rechter kolom onder: branden -->
-  <div class="brand-cell">
-    <h2>
-      Branden
-      <span class="badge" id="fires-badge">geen</span>
-    </h2>
-    <div class="brand-list" id="brand-list">
-      <div class="empty" style="padding:12px;text-align:center;color:var(--dim);font-size:11px">geen branden gedetecteerd</div>
+      <section class="panel telemetry" aria-labelledby="tele-title">
+        <div class="phead">
+          <span class="label" id="tele-title"><span class="br">[+]</span> telemetrie</span>
+          <span class="meta" id="fix-badge">—</span>
+        </div>
+        <div class="tbody tele-body">
+          <div class="agl-hero">
+            <span class="hero-num" id="d-agl">—</span>
+            <span class="hero-unit">m agl</span>
+            <span class="hero-sub"><span id="d-msl">—</span> m msl</span>
+          </div>
+          <dl class="kv">
+            <div><dt>positie</dt><dd id="d-pos">—</dd></div>
+            <div><dt>heading</dt><dd id="d-heading">—</dd></div>
+            <div><dt>gps</dt><dd id="d-gps">—</dd></div>
+            <div><dt>max</dt><dd id="t-max">—</dd></div>
+            <div><dt>omgeving</dt><dd id="t-amb">—</dd></div>
+            <div><dt>drempel</dt><dd id="t-thr">—</dd></div>
+          </dl>
+          <div class="sysrow">
+            <span class="chip" id="sys-mode">—</span>
+            <span class="chip" id="sys-bat" hidden></span>
+            <span class="chip" id="sys-auto" hidden></span>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel logs" aria-labelledby="logs-title">
+        <div class="phead">
+          <span class="label" id="logs-title"><span class="br">[+]</span> logboek</span>
+          <span class="meta" id="log-badge">[0]</span>
+        </div>
+        <div class="tbody log-body">
+          <div class="log-box" id="log-box"></div>
+        </div>
+      </section>
     </div>
-  </div>
-</main>
+  </main>
+</div>
 
 <script>
-const canvas = document.getElementById('thermal');
-const ctx = canvas.getContext('2d');
-const rgb = document.getElementById('rgb');
-const rgbFb = document.getElementById('rgb-fb');
+(() => {
+  "use strict";
 
-function kleur(t) {
-  t = Math.max(0, Math.min(1, t));
-  const stops = [
-    [13,17,23],[28,55,120],[180,60,45],[255,160,40],[255,240,200]
+  const $ = (id) => document.getElementById(id);
+  const canvas = $("thermal");
+  const ctx = canvas.getContext("2d");
+  const W = canvas.width;
+  const H = canvas.height;
+  const CW = W / 32;
+  const CH = H / 24;
+
+  const thermalPanel = $("thermal-panel");
+  const rgbPanel = $("rgb-panel");
+  const rgbFrame = $("rgb-frame");
+  const camrow = $("camrow");
+
+  const STOPS = [
+    [11, 26, 51],
+    [30, 79, 156],
+    [179, 64, 47],
+    [255, 159, 10],
+    [255, 244, 214],
   ];
-  const x = t * (stops.length - 1);
-  const i = Math.min(Math.floor(x), stops.length - 2);
-  const f = x - i;
-  return stops[i].map((v,k) => Math.round(v + (stops[i+1][k]-v)*f));
-}
 
-function fmt(v, d=1, s='') {
-  if (v == null) return '—';
-  return v.toFixed(d) + s;
-}
+  let currentFires = [];
+  let expandedKey = null;
+  let lastFiresKey = null;
+  let lastLogKey = null;
+  let rgbUrl = null;
+  let rgbAspect = 16 / 9;   // fallback tot de stream zich meldt
+  let warningShown = false;
 
-function now() { return new Date().toTimeString().slice(0,8); }
+  function kleur(t) {
+    t = Math.max(0, Math.min(1, t));
+    const x = t * (STOPS.length - 1);
+    const i = Math.min(Math.floor(x), STOPS.length - 2);
+    const f = x - i;
+    const a = STOPS[i];
+    const b = STOPS[i + 1];
+    return `rgb(${Math.round(a[0] + (b[0] - a[0]) * f)},`
+         + `${Math.round(a[1] + (b[1] - a[1]) * f)},`
+         + `${Math.round(a[2] + (b[2] - a[2]) * f)})`;
+  }
 
-rgb.onerror = () => { rgb.style.display = 'none'; rgbFb.style.display = 'flex'; };
+  function fmt(v, d = 1, suffix = "") {
+    if (v == null || Number.isNaN(Number(v))) return "—";
+    return Number(v).toFixed(d) + suffix;
+  }
 
-let frameState = null;
-function drawThermal(cells) {
-  if (!cells || cells.length !== 768) return;
-  const mn = Math.min(...cells);
-  const mx = Math.max(...cells);
-  const range = Math.max(mx - mn, 0.001);
-  const img = ctx.createImageData(128, 96);
-  for (let py = 0; py < 96; py++) {
-    for (let px = 0; px < 128; px++) {
-      const tx = Math.floor(px/4), ty = Math.floor(py/4);
-      const v = cells[ty*32+tx];
-      const norm = (v-mn)/range;
-      const [r,g,b] = kleur(norm);
-      const pi = (py*128+px)*4;
-      img.data[pi]=r; img.data[pi+1]=g; img.data[pi+2]=b; img.data[pi+3]=255;
+  function ageText(seconds) {
+    if (seconds == null) return "—";
+    if (seconds < 1) return "<1 s";
+    if (seconds < 60) return Math.round(seconds) + " s";
+    return Math.floor(seconds / 60) + " min";
+  }
+
+  function clock(epoch) {
+    if (!epoch) return "--:--:--";
+    return new Date(epoch * 1000).toTimeString().slice(0, 8);
+  }
+
+  // ---------- camera box sizing ----------
+  // Beide cameras krijgen de grootst mogelijke box met hun eigen
+  // beeldverhouding (thermisch 32x24 = 4:3, RGB uit de stream).
+  function layoutCameras() {
+    if (window.innerWidth <= 760) {
+      thermalPanel.style.width = "";
+      thermalPanel.style.height = "";
+      rgbPanel.style.width = "";
+      rgbPanel.style.height = "";
+      return;
+    }
+
+    const arT = 4 / 3;
+    const arR = rgbAspect || 16 / 9;
+    const gap = 10;
+    const chromeX = 18;   // 16 padding + 2 border per paneel
+    const chromeY = 50;   // 32 header + 16 padding + 2 border
+    const availW = camrow.clientWidth;
+    const availH = camrow.clientHeight;
+    if (availW < 240 || availH < 140) return;
+
+    const frameH = Math.min(
+      availH - chromeY,
+      (availW - gap - chromeX * 2) / (arT + arR)
+    );
+    if (frameH <= 0) return;
+
+    thermalPanel.style.width = (frameH * arT + chromeX) + "px";
+    thermalPanel.style.height = (frameH + chromeY) + "px";
+    rgbPanel.style.width = (frameH * arR + chromeX) + "px";
+    rgbPanel.style.height = (frameH + chromeY) + "px";
+  }
+
+  window.addEventListener("resize", layoutCameras);
+
+  // ---------- status + warning ----------
+  function renderStatus(state) {
+    const age = state.last_update
+      ? Math.max(0, Date.now() / 1000 - state.last_update)
+      : null;
+    const el = $("status");
+
+    if (age == null) {
+      el.className = "status idle";
+      el.textContent = "[ ] niet verbonden";
+      el.title = "nog geen data ontvangen";
+    } else if (age <= 3) {
+      el.className = "status live";
+      el.textContent = "[●] verbonden";
+      el.title = "laatste frame " + ageText(age);
+    } else {
+      el.className = "status stale";
+      el.textContent = "[!] niet verbonden";
+      el.title = "laatste frame " + ageText(age);
+    }
+
+    const warn = state.warning;
+    $("warning").hidden = !warn;
+    $("warning-text").textContent = warn || "";
+    if (!!warn !== warningShown) {
+      warningShown = !!warn;
+      requestAnimationFrame(layoutCameras);
     }
   }
-  ctx.putImageData(img, 0, 0);
-  document.getElementById('t-max').textContent = mx.toFixed(1);
-  document.getElementById('t-amb').textContent = fmt(frameState?.thermal?.ambient, 1);
-  document.getElementById('t-thr').textContent = fmt(frameState?.thermal?.threshold, 1);
-}
 
-function setStatus(live, text) {
-  const pill = document.getElementById('status');
-  pill.classList.toggle('live', live);
-  document.getElementById('status-text').textContent = text;
-}
+  // ---------- thermal ----------
+  function drawThermal(cells, thermal) {
+    const empty = $("thermal-empty");
+    const ok = Array.isArray(cells) && cells.length === 768;
 
-function updateDrone(d, thermalInfo) {
-  document.getElementById('d-lat').textContent = fmt(d.lat, 6);
-  document.getElementById('d-lon').textContent = fmt(d.lon, 6);
-  document.getElementById('d-alt-msl').textContent = fmt(d.alt_msl, 1, ' m MSL');
-  document.getElementById('d-alt-agl').textContent = fmt(d.agl_m, 1, ' m AGL');
-  document.getElementById('d-heading').textContent = fmt(d.heading_deg, 0, '°');
+    if (!ok) {
+      ctx.fillStyle = "#060607";
+      ctx.fillRect(0, 0, W, H);
+      empty.hidden = false;
+      $("t-max").textContent = "—";
+      $("t-amb").textContent = "—";
+      $("t-thr").textContent = "—";
+      return;
+    }
+    empty.hidden = true;
 
-  const fe = document.getElementById('d-fix');
-  if (d.fc_fix != null) {
-    const lab = {0:'geen',1:'2D',2:'3D',3:'3D (RTK)'};
-    fe.textContent = lab[d.fc_fix] || String(d.fc_fix);
-    fe.className = 'val sm ' + (d.fc_fix>=3?'good':d.fc_fix>=2?'':'dim');
-  } else { fe.textContent = '—'; fe.className = 'val sm dim'; }
+    const mn = Math.min(...cells);
+    const mx = Math.max(...cells);
+    const ambient = thermal && thermal.ambient != null ? thermal.ambient : mn;
 
-  document.getElementById('d-sats').textContent = d.fc_sats!=null ? d.fc_sats : '—';
-  document.getElementById('d-hdop').textContent = d.fc_hdop!=null ? d.fc_hdop.toFixed(1) : '—';
-  document.getElementById('d-thermal').textContent = thermalInfo?.ambient!=null ? fmt(thermalInfo.ambient,1)+'°C' : '—';
-  document.getElementById('d-pixels').textContent = thermalInfo?.n_hotspots!=null ? String(thermalInfo.n_hotspots) : '—';
+    // Vaste, begrensde schaal: ruis wordt niet opgerekt tot een nep-brand,
+    // maar een echte uitschieter blijft zichtbaar.
+    const lo = ambient - 5;
+    const hi = Math.max(mx, ambient + 40);
+    const span = Math.max(hi - lo, 0.1);
 
-  // Badge AGL
-  const badge = document.getElementById('drone-badge');
-  if (d.agl_m != null) {
-    const a = d.agl_m;
-    if (a < 5 || a > 30) { badge.textContent = a.toFixed(1)+' m AGL ⚠'; badge.className='badge alert'; }
-    else { badge.textContent = a.toFixed(1)+' m AGL'; badge.className='badge ok'; }
-  } else { badge.textContent = '—'; badge.className='badge'; }
-
-  // Sysbar
-  const bat = frameState?.battery;
-  document.getElementById('s-bat').textContent = bat ? bat.voltage_v.toFixed(1)+'V '+bat.percent+'%' : '—';
-  document.getElementById('s-bat').className = 'v' + (bat ? ' good' : '');
-  document.getElementById('s-mode').textContent = frameState?.mode || '—';
-  document.getElementById('s-auto').textContent = frameState?.autonomy?.enabled ? 'AAN' : 'UIT';
-  document.getElementById('s-auto').className = 'v' + (frameState?.autonomy?.enabled ? ' accent' : '');
-  document.getElementById('s-veld').textContent = '5–30 m';
-  document.getElementById('s-agl').textContent = fmt(d.agl_m, 1, ' m');
-  document.getElementById('s-heading').textContent = fmt(d.heading_deg, 0, '°');
-}
-
-function updateBrands(fires) {
-  const list = document.getElementById('brand-list');
-  const badge = document.getElementById('fires-badge');
-
-  if (!fires || fires.length === 0) {
-    list.innerHTML = '<div class="empty" style="padding:12px;text-align:center;color:var(--dim);font-size:11px">geen branden gedetecteerd</div>';
-    badge.textContent = 'geen';
-    badge.className = 'badge ok';
-    return;
-  }
-
-  badge.textContent = fires.length + ' brand(en)';
-  badge.className = 'badge alert';
-
-  list.innerHTML = fires.map((b,i) => {
-    const loc = b.hotspot_lat.toFixed(5) + ', ' + b.hotspot_lon.toFixed(5);
-    return `
-      <div class="brand" data-idx="${i}">
-        <div class="left">
-          <span class="id">brand ${i+1}</span>
-          <span class="temp">${b.max_temp.toFixed(1)}<span class="u">°C</span></span>
-          <span class="loc">${loc}</span>
-        </div>
-        <span class="dist">${b.afstand_m.toFixed(1)} m</span>
-      </div>`;
-  }).join('');
-
-  list.querySelectorAll('.brand').forEach(el => {
-    el.addEventListener('click', (e) => {
-      const idx = parseInt(el.dataset.idx);
-      const b = fires[idx];
-      const wasExpanded = el.classList.contains('expand');
-
-      // Andere eerst collapsen
-      list.querySelectorAll('.brand.expand').forEach(other => other.classList.remove('expand'));
-
-      if (wasExpanded) {
-        el.classList.remove('expand');
-      } else {
-        el.classList.add('expand');
-        let detail = el.querySelector('.expand-detail');
-        if (!detail) {
-          detail = document.createElement('div');
-          detail.className = 'expand-detail';
-          el.appendChild(detail);
-        }
-        detail.innerHTML = `
-          <div class="ed-row"><span class="ed-k">temperatuur</span><span class="ed-v hot">${b.max_temp.toFixed(1)} °C</span></div>
-          <div class="ed-row"><span class="ed-k">stijging</span><span class="ed-v">${b.delta_t.toFixed(1)} °C</span></div>
-          <div class="ed-row"><span class="ed-k">score</span><span class="ed-v">${b.score.toFixed(2)}</span></div>
-          <div class="ed-row"><span class="ed-k">pixels</span><span class="ed-v">${b.area} px</span></div>
-          <div class="ed-row"><span class="ed-k">locatie</span><span class="ed-v">${b.hotspot_lat.toFixed(5)}, ${b.hotspot_lon.toFixed(5)}</span></div>
-          <div class="ed-row"><span class="ed-k">afstand</span><span class="ed-v">${b.afstand_m.toFixed(1)} m</span></div>
-          <div class="ed-time">gedetecteerd om ${now()}</div>
-        `;
+    for (let y = 0; y < 24; y++) {
+      for (let x = 0; x < 32; x++) {
+        ctx.fillStyle = kleur((cells[y * 32 + x] - lo) / span);
+        ctx.fillRect(x * CW, y * CH, CW, CH);
       }
-    });
+    }
+
+    // Heetste pixel van elke brand: wit kader, donkere kern.
+    for (const f of currentFires) {
+      if (f.status !== "active") continue;
+      if (f.x == null || f.y == null) continue;
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = "#ececef";
+      ctx.strokeRect(f.x * CW + 1, f.y * CH + 1, CW - 2, CH - 2);
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = "#0b0b0d";
+      ctx.strokeRect(f.x * CW + CW / 2 - 1, f.y * CH + CH / 2 - 1, 2, 2);
+    }
+
+    $("t-max").textContent = fmt(mx, 1, " °C");
+    $("t-amb").textContent = fmt(thermal && thermal.ambient, 1, " °C");
+    $("t-thr").textContent = fmt(thermal && thermal.threshold, 1, " °C");
+  }
+
+  // ---------- rgb ----------
+  function setRgb(url) {
+    if (!url || url === rgbUrl) return;
+    rgbUrl = url;
+    $("rgb-url").textContent = url.replace(/^https?:\/\//, "");
+    $("rgb").src = url;
+  }
+
+  $("rgb").addEventListener("load", (ev) => {
+    $("rgb-fb").hidden = true;
+    const img = ev.currentTarget;
+    if (img.naturalWidth && img.naturalHeight) {
+      rgbAspect = img.naturalWidth / img.naturalHeight;
+      rgbFrame.style.aspectRatio = String(rgbAspect);
+      layoutCameras();
+    }
   });
-}
+  $("rgb").addEventListener("error", () => { $("rgb-fb").hidden = false; });
+  $("rgb-reload").addEventListener("click", () => {
+    if (!rgbUrl) return;
+    const sep = rgbUrl.includes("?") ? "&" : "?";
+    $("rgb").src = rgbUrl + sep + "t=" + Date.now();
+  });
 
-function updateLogs(logs) {
-  const box = document.getElementById('log-box');
-  const badge = document.getElementById('log-badge');
+  $("new-flight").addEventListener("click", async () => {
+    if (!window.confirm("Nieuwe vlucht starten? De huidige vlucht wordt "
+        + "opgeslagen en alle live-data wordt gereset.")) return;
+    try {
+      const response = await fetch("/api/new-flight", { method: "POST" });
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      expandedKey = null;
+      lastFiresKey = null;
+      lastLogKey = null;
+      currentFires = [];
+      await tick();
+    } catch (err) {
+      window.alert("Nieuwe vlucht starten mislukte.");
+    }
+  });
 
-  if (!logs || logs.length === 0) {
-    box.innerHTML = '<div class="log-empty">—</div>';
-    badge.textContent = '0 entries';
-    return;
+  // ---------- telemetry ----------
+  const FIX_LABELS = { 0: "geen fix", 1: "2D", 2: "3D", 3: "3D rtk" };
+
+  function gpsText(d) {
+    const parts = [];
+    if (d.fc_fix != null) parts.push(FIX_LABELS[d.fc_fix] || String(d.fc_fix));
+    if (d.fc_sats != null) parts.push(d.fc_sats + " sat");
+    if (d.fc_hdop != null) parts.push(Number(d.fc_hdop).toFixed(1) + " hdop");
+    return parts.length ? parts.join(" · ") : "—";
   }
 
-  const recent = logs.slice(-20);
-  box.innerHTML = recent.map(log => {
-    const fire = log.includes('brand') && log.includes('C op');
-    return `<div class="log-line${fire?' fire':''}"><span class="t">${now()}</span><span>${log}</span></div>`;
-  }).join('');
-  badge.textContent = logs.length + ' entries';
-}
+  function renderTelemetry(state) {
+    const d = state.drone || {};
+    const agl = d.agl_m;
 
-async function tick() {
-  try {
-    const [state, frame] = await Promise.all([
-      fetch('/api/state').then(r=>r.json()),
-      fetch('/api/frame').then(r=>r.json()),
-    ]);
-    frameState = state;
+    $("d-agl").textContent = fmt(agl, 1);
+    $("d-agl").classList.toggle("warn", agl != null && (agl < 5 || agl > 30));
+    $("d-msl").textContent = fmt(d.alt_msl, 1);
 
-    const live = state.drone.lat != null;
-    setStatus(live,
-      live
-        ? (state.thermal.n_fires ? state.thermal.n_fires+' brand'+(state.thermal.n_fires>1?'en':'') : 'geen branden') + ' · AGL '+fmt(state.drone.agl_m,1)+' m'
-        : 'wachten op verbinding…');
+    $("d-pos").textContent = (d.lat != null && d.lon != null)
+      ? `${Number(d.lat).toFixed(5)}, ${Number(d.lon).toFixed(5)}`
+      : "—";
+    $("d-heading").textContent = fmt(d.heading_deg, 0, "°");
+    $("d-gps").textContent = gpsText(d);
 
-    if (state.rgb_url && rgb.src !== state.rgb_url) rgb.src = state.rgb_url;
-    drawThermal(frame.cells);
-    updateDrone(state.drone, state.thermal);
-    updateBrands(state.fires);
-    updateLogs(state.logs);
-  } catch(e) {
-    setStatus(false, 'geen verbinding');
+    const badge = $("fix-badge");
+    const fixOk = d.fc_fix != null && d.fc_fix >= 2;
+    badge.textContent = d.fc_fix == null ? "—" : (fixOk ? "fix ok" : "geen fix");
+    badge.className = "meta" + (d.fc_fix != null && !fixOk ? " alert" : "");
+
+    $("sys-mode").textContent = state.mode || "—";
+
+    const bat = state.battery;
+    const batEl = $("sys-bat");
+    batEl.hidden = !bat;
+    if (bat) batEl.textContent = `${Number(bat.voltage_v).toFixed(1)} V · ${bat.percent}%`;
+
+    const autoOn = !!(state.autonomy && state.autonomy.enabled);
+    const autoEl = $("sys-auto");
+    autoEl.hidden = !autoOn;
+    autoEl.textContent = "autonomie aan";
+    autoEl.className = "chip" + (autoOn ? " on" : "");
   }
-}
 
-setInterval(tick, 1000);
-tick();
+  // ---------- fires ----------
+  // Het track-ID is stabiel over frames; temperaturen en coördinaten
+  // veranderen elke seconde en zouden een open kaart laten dichtklappen.
+  function fireKey(f, i) {
+    return f.id || ("B" + (i + 1));
+  }
+
+  function el(tag, cls, text) {
+    const node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text != null) node.textContent = text;
+    return node;
+  }
+
+  function renderFires(fires) {
+    const key = JSON.stringify(fires);
+    if (key === lastFiresKey) return;
+    lastFiresKey = key;
+
+    const list = $("fire-list");
+    list.textContent = "";
+    const count = fires ? fires.length : 0;
+    const activeCount = fires
+      ? fires.filter((f) => f.status === "active").length : 0;
+    $("fires-badge").textContent = "[" + count + "]";
+    $("fires-badge").className = "meta" + (activeCount ? " alert" : "");
+
+    if (!fires || count === 0) {
+      list.appendChild(el("div", "empty", "[ ] geen branden"));
+      expandedKey = null;
+      return;
+    }
+
+    fires.forEach((f, i) => {
+      const fk = fireKey(f, i);
+      const open = fk === expandedKey;
+      const active = f.status ? f.status === "active" : true;
+
+      const card = el("div", "fire" + (open ? " open" : "")
+        + (active ? "" : " lost"));
+
+      const head = el("button", "fire-head");
+      head.type = "button";
+      head.setAttribute("aria-expanded", String(open));
+
+      head.appendChild(el("span", "fid",
+        (active ? "[!] " : "[ ] ") + (f.id || ("B" + (i + 1)))));
+
+      const main = el("span", "fmain");
+      const temp = el("span", "ftemp", fmt(f.max_temp, 1));
+      temp.appendChild(el("span", "u", "°C"));
+      main.appendChild(temp);
+      const loc = f.hotspot_lat != null
+        ? `${Number(f.hotspot_lat).toFixed(5)}, ${Number(f.hotspot_lon).toFixed(5)}`
+        : "locatie onbekend";
+      main.appendChild(el("span", "fmeta",
+        loc + " · " + clock(f.last_seen)));
+      head.appendChild(main);
+
+      head.appendChild(el("span", "fdist",
+        f.afstand_m != null ? fmt(f.afstand_m, 1, " m") : "—"));
+
+      head.addEventListener("click", () => {
+        expandedKey = open ? null : fk;
+        lastFiresKey = null;
+        renderFires(currentFires);
+      });
+      card.appendChild(head);
+
+      if (open) {
+        const detail = el("div", "fire-detail");
+        const rows = [
+          ["status", active ? "in beeld" : "uit beeld"],
+          ["laatst", clock(f.last_seen)],
+          ["eerste", clock(f.first_seen)],
+          ["metingen", String(f.observations)],
+          ["stijging", fmt(f.delta_t, 1, " °C")],
+          ["score", fmt(f.score, 2)],
+          ["pixels", f.area + " px"],
+          ["afstand", f.afstand_m != null ? fmt(f.afstand_m, 1, " m") : "—"],
+          ["latitude", f.hotspot_lat != null ? Number(f.hotspot_lat).toFixed(6) : "—"],
+          ["longitude", f.hotspot_lon != null ? Number(f.hotspot_lon).toFixed(6) : "—"],
+        ];
+        for (const [k, v] of rows) {
+          const row = el("div", "fd");
+          row.appendChild(el("span", "k", k));
+          row.appendChild(el("span", "v", v));
+          detail.appendChild(row);
+        }
+
+        const reasons = f.reasons || {};
+        const reasonDefs = [
+          ["stijging", "stijging_boven_omgeving"],
+          ["absoluut warm", "absoluut_warm_genoeg"],
+          ["groot genoeg", "groot_genoeg"],
+        ];
+        const reasonBox = el("div", "reasons");
+        for (const [label, field] of reasonDefs) {
+          const ok = !!reasons[field];
+          reasonBox.appendChild(el("span", ok ? "ok" : "",
+            (ok ? "[x] " : "[-] ") + label));
+        }
+        detail.appendChild(reasonBox);
+
+        if (f.hotspot_lat != null && f.hotspot_lon != null) {
+          const actions = el("div", "fire-actions");
+          const copy = el("button", "btn", "[kopieer]");
+          copy.type = "button";
+          copy.addEventListener("click", async () => {
+            const text = `${Number(f.hotspot_lat).toFixed(6)}, `
+                       + `${Number(f.hotspot_lon).toFixed(6)}`;
+            try {
+              await navigator.clipboard.writeText(text);
+              copy.textContent = "[gekopieerd]";
+            } catch (err) {
+              copy.textContent = "[selecteer]";
+            }
+            setTimeout(() => { copy.textContent = "[kopieer]"; }, 1400);
+          });
+          actions.appendChild(copy);
+          detail.appendChild(actions);
+        }
+
+        card.appendChild(detail);
+      }
+
+      list.appendChild(card);
+    });
+  }
+
+  // ---------- logs ----------
+  function renderLogs(state) {
+    const logs = state.logs || [];
+    const times = state.log_times || [];
+    const key = `${logs.length}|${logs[logs.length - 1] || ""}|`
+              + `${times[times.length - 1] || ""}`;
+    if (key === lastLogKey) return;
+    lastLogKey = key;
+
+    const box = $("log-box");
+    $("log-badge").textContent = "[" + logs.length + "]";
+
+    const atBottom =
+      box.scrollHeight - box.scrollTop - box.clientHeight < 24;
+
+    box.textContent = "";
+    if (logs.length === 0) {
+      box.appendChild(el("div", "empty", "[ ] nog geen gebeurtenissen"));
+      return;
+    }
+
+    logs.forEach((message, i) => {
+      const isFire = /brand/i.test(message);
+      const line = el("div", "log-line" + (isFire ? " fire" : ""));
+      line.appendChild(el("span", "t", clock(times[i])));
+      line.appendChild(el("span", "tag", isFire ? "[!]" : "[·]"));
+      line.appendChild(el("span", "m", message));
+      box.appendChild(line);
+    });
+
+    if (atBottom) box.scrollTop = box.scrollHeight;
+  }
+
+  // ---------- poll ----------
+  async function tick() {
+    try {
+      const [state, frame] = await Promise.all([
+        fetch("/api/state", { cache: "no-store" }).then((r) => r.json()),
+        fetch("/api/frame", { cache: "no-store" }).then((r) => r.json()),
+      ]);
+
+      currentFires = state.fires || [];
+
+      renderStatus(state);
+      drawThermal(frame.cells, state.thermal);
+      setRgb(state.rgb_url);
+      renderTelemetry(state);
+      renderFires(currentFires);
+      renderLogs(state);
+    } catch (err) {
+      const el = $("status");
+      el.className = "status stale";
+      el.textContent = "[!] geen verbinding";
+    }
+  }
+
+  layoutCameras();
+  requestAnimationFrame(layoutCameras);
+  setInterval(tick, 1000);
+  tick();
+})();
 </script>
 </body>
 </html>

@@ -6,5 +6,8 @@ __pycache__/
 # OS
 .DS_Store
 
+# Flight recordings
+logs/
+
 # Local tool state
 .freebuff/

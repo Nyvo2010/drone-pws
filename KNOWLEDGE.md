@@ -489,4 +489,61 @@ Dus:
 - Naad voor teamgenoot: POST /api/ingest {frame (768), drone, gps_alt_launch}.
 - Naad voor later autonoom vliegen: State (lezen) -> autonomy.suggest_action (stub, uit).
   Besturing stuurt nooit hardware aan; commando's lopen via de FC-link.
+- Dashboard-UI: donker canvas, één mono-font, 1px hairline-panelen, 4px radius
+  alleen op interactieve elementen, geen schaduwen of gradients. Geen Google
+  Fonts of andere netwerkbronnen: de UI moet offline werken.
+- Informatiehiërarchie dashboard: camera's bovenaan (primair), branden/
+  telemetrie/logboek eronder. Detail (score, delta, reasons, coördinaten)
+  zit achter één klik per brand; placeholders en lege velden worden verborgen
+  in plaats van als "—"-ruis getoond. De topbar is compact: alleen SAURON,
+  verbonden/niet verbonden en de nieuwe-vlucht-knop.
+- Camera-boxen volgen de echte beeldverhouding: thermisch is 32x24 = 4:3,
+  RGB wordt bij het laden uit naturalWidth/naturalHeight gelezen (fallback
+  16:9). De boxen krijgen samen de grootst mogelijke maat binnen de
+  camerarij, zodat beide beelden zonder vervorming passen.
+- Brand-tracking: dezelfde brand houdt hetzelfde ID als hij binnen
+  `track_match_radius_m` (8 m) terugkomt; zonder locatie wordt op pixelafstand
+  (4 px) gematcht. Na 2,5 s niet gezien = `lost` (last_seen blijft staan);
+  binnen 120 s terug = dezelfde track, daarna gearchiveerd. Dit voorkomt
+  duplicaten bij korte dropouts en bij een brand die even uit beeld valt.
+  Stopt de datastroom helemaal, dan laat de watchdog de brandtijd gewoon
+  doorlopen: na 2,5 s wordt de track `lost`, na 120 s gearchiveerd.
+- Logboek = gebeurtenissen, niet elke frame dezelfde brand: eerste data,
+  data hervat, GPS-fixwijziging, nieuwe/uit/terug/gearchiveerde brand,
+  waarschuwingen. De per-frame brandinfo staat in het vluchtbestand.
+- Vluchtbestand: `logs/flight-YYYYMMDD-HHMMSS.jsonl`, append-only en direct
+  geflusht. Bevat flight_start, log, ingest (drone/thermal/hotspots/branden),
+  fire_new/lost/reacquired/archived en flight_end. Nieuwe vlucht sluit af en
+  opent een nieuw bestand; `GET /api/flights` en `/api/flights/<naam>` geven
+  de bestanden terug. `--log-dir` kiest de map.
+- Header: alleen SAURON, verbonden/niet verbonden (op basis van last_update)
+  en de nieuwe-vlucht-knop die state + tracker reset.
+- Server bindt op 0.0.0.0:8000, anders kan de ESP32 (WiFi-AP) de laptop niet
+  bereiken. `--host 127.0.0.1` houdt hem lokaal.
+- Versheid is expliciet: State.last_update (epoch) + parallelle log_times; de
+  UI toont live/stale in plaats van oude waarden als actueel te presenteren.
+- AGL <= 0: brand wel melden, geen coördinaten verzinnen, waarschuwing tonen.
+  Nooit een 400/500 door een ontbrekende locatie.
+- Framevalidatie: alleen eindige floats. NaN/inf/tekst geeft HTTP 400  in plaats van stil "geen brand".
+- Dode pixels / I2C-uitschieters: waarden buiten `valid_temp_min_c`..
+  `valid_temp_max_c` (-20..600 C) worden door de mediaan van het frame
+  vervangen, vóór blobdetectie én vóór `/api/frame`. Reden: de MLX90640
+  heeft altijd een paar dode pixels en een mislukte read geeft -273 of
+  1000+. Zonder klep wordt zo'n cel een brand met coördinaten, en schaalt
+  het canvas op 1200 C (rest van het veld lijkt ijs). Getest: 3 naast
+  elkaar liggende kapotte cellen gaven eerst een brand, nu niets.
+- Locatie is een voorrecht: alleen bij `fix >= 2` (3D), een geldige
+  dronepositie (niet 0,0 / binnen -90..90 en -180..180) en bekende
+  hoogte. Anders: brand wel melden, coördinaten None + uitleg in
+  `location_warning` en het logboek. Een kapot GPS-pakket mag nooit de
+  hele frame kosten.
+- Ingest is tolerant voor de firmware van de teamgenoot: aliassen
+  (`temps`/`frame`, `heading`/`yaw`, `alt`/`alt_msl`, `latitude`/
+  `longitude`), genest 24x32-frame en `gps_alt_launch` die maar één keer
+  per vlucht gestuurd hoeft te worden (laptop onthoudt hem). Afgewezen
+  POSTs staan in het logboek (eerste 3 altijd, daarna max 1 per 10 s):
+  zonder dat is een verkeerd contract onzichtbaar in het veld.
+- `--capture` bewaart ruwe frames in het vluchtbestand; `python3 -m
+  sauron.replay <bestand>` hertunet drempels offline op echte velddata en
+  telt pixels buiten het geldige bereik.
 

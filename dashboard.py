@@ -9,6 +9,10 @@ Demo (geen hardware):  python3 dashboard.py --demo
      langzaam) + vaste dronepositie. Handig voor UI-check zonder drone.
 
 Open daarna: http://localhost:8000
+
+Elke vlucht wordt gelogd als JSONL in `logs/` (aanpasbaar met --log-dir);
+de header heeft een nieuwe-vlucht-knop die de live-data reset en een nieuw
+bestand opent.
 """
 
 import argparse
@@ -16,6 +20,7 @@ import math
 import threading
 import time
 
+from sauron.flightlog import FlightRecorder
 from sauron.server import App, run
 from sauron.sim import make_frame
 
@@ -42,15 +47,29 @@ def main():
     parser.add_argument("--demo", action="store_true",
                         help="gesimuleerde live-feed i.p.v. wachten op hardware")
     parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--host", default="0.0.0.0",
+                        help="bind-adres (standaard 0.0.0.0 zodat de ESP32 "
+                             "de laptop over WiFi kan bereiken; gebruik "
+                             "127.0.0.1 om alleen lokaal te luisteren)")
+    parser.add_argument("--log-dir", default="logs",
+                        help="map voor vluchtbestanden (JSONL per vlucht)")
+    parser.add_argument("--capture", action="store_true",
+                        help="bewaar ook elk ruw frame in het vluchtbestand, "
+                             "zodat je drempels achteraf kunt hertunen "
+                             "(python3 -m sauron.replay <bestand>)")
     args = parser.parse_args()
 
-    app = App()
+    recorder = FlightRecorder(args.log_dir, capture_frames=args.capture)
+    app = App(recorder=recorder)
+    app.start_watchdog()
     if args.demo:
         draad = threading.Thread(target=demo_loop, args=(app,), daemon=True)
         draad.start()
     else:
         app.state.add_log("wachten op POST /api/ingest (ESP32/FC-forwarder)")
-    run(app, port=args.port)
+    if args.capture:
+        app.state.add_log("capture aan: ruwe frames worden opgenomen")
+    run(app, host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

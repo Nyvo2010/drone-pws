@@ -30,6 +30,14 @@ class Config:
     # 180 graden gedraaid is gemonteerd, zet dit op False.
     row0_is_forward: bool = True
 
+    # -- Validatie van meetwaarden --------------------------------------
+    # Dode pixels en I2C-flarden van de MLX90640 geven waarden als -273 of
+    # 1000+ C. Buiten dit bereik is het geen temperatuur maar een sensorfout:
+    # zo'n cel wordt door de mediaan van het frame vervangen voordat we
+    # blobs zoeken. Zonder deze klep wordt één dood pixel een "brand".
+    valid_temp_min_c: float = -20.0
+    valid_temp_max_c: float = 600.0
+
     # -- Laag 1: heat point identificatie ------------------------------
     # Drempel = omgevingstemperatuur + deze marge. Hoger = minder vals
     # alarm (zon/warme daken), lager = vroegere detectie. Kalibreren!
@@ -45,6 +53,16 @@ class Config:
     # Absolute ondergrens: kouder dan dit is nooit een bosbrand,
     # ook niet bij een koude dag (voorkomt winter-vals-alarm).
     fire_min_abs: float = 40.0
+
+    # -- Brand-tracking over frames -------------------------------------
+    # Zelfde brand binnen deze straal (wereldcoördinaten) = zelfde track.
+    track_match_radius_m: float = 8.0
+    # Zonder geldige locatie (AGL <= 0) matchen we op pixelafstand.
+    track_pixel_radius: int = 4
+    # Na deze stilte (seconden) is een brand "uit beeld".
+    track_lost_after_s: float = 2.5
+    # Uit-beeld-tracks blijven zo lang beschikbaar voor herdetectie.
+    track_archive_after_s: float = 120.0
 
     # -- Geometrie: hoogte ----------------------------------------------
     # Verwacht vliegbereik boven het lanceerpunt. Buiten deze band geven

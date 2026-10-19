@@ -105,23 +105,6 @@ def offset_to_latlon(lat, lon, oost_m, noord_m, cfg=DEFAULT):
     return lat + dlat, lon + dlon
 
 
-def footprint_m(agl, cfg=DEFAULT):
-    """Hoe groot is het camerabeeld op de grond? (breedte, hoogte, px-maten).
-
-    Handig voor de operator: bij 15 m hoogte dekt het beeld ca. 43 x 23 m,
-    dus 1 pixel is dan ~1,3 x 1,0 m. Een brand kleiner dan een pixel
-    wordt uitgemiddeld en lijkt kouder dan hij is!
-    """
-    breedte = 2.0 * agl * math.tan(math.radians(cfg.fov_h_deg / 2.0))
-    hoogte = 2.0 * agl * math.tan(math.radians(cfg.fov_v_deg / 2.0))
-    return {
-        "breedte_m": breedte,
-        "hoogte_m": hoogte,
-        "pixel_breedte_m": breedte / cfg.width,
-        "pixel_hoogte_m": hoogte / cfg.height,
-    }
-
-
 def locate_hotspot(drone_lat, drone_lon, heading_deg, agl, x, y, cfg=DEFAULT):
     """Volledige keten: dronepositie + pixel -> hotspot-positie.
 

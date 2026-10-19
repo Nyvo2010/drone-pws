@@ -17,28 +17,70 @@ Stappen:
 Alleen stdlib, geen numpy: werkt overal en offline.
 """
 
+import math
 from collections import deque
 
 from .config import DEFAULT, Config
 
 
-def frame_to_matrix(frame):
-    """Zet een plat 768-frame om naar 24 rijen van 32 kolommen.
+def validated_values(frame):
+    """Frame -> lijst floats, of ValueError als het pakket niet klopt.
 
-    Geeft ValueError bij een verkeerde lengte, zodat een kapot ESP32-
-    pakket nooit stilletjes als "geen brand" wordt geïnterpreteerd.
+    Een kapot pakket (verkeerde lengte, tekst, None, NaN, inf) mag nooit
+    stilzwijgend als "geen brand" doorgaan: de server maakt er HTTP 400
+    van, zodat je in het veld ziet dat er iets mis is met de zender.
     """
-    values = list(frame)
-    if len(values) != DEFAULT.width * DEFAULT.height:
+    ruw = list(frame)
+    if len(ruw) != DEFAULT.width * DEFAULT.height:
         raise ValueError(
             "verwacht %d waarden, kreeg %d"
-            % (DEFAULT.width * DEFAULT.height, len(values))
+            % (DEFAULT.width * DEFAULT.height, len(ruw))
         )
-    # Rij-majeur: eerste 32 waarden = rij 0, enzovoort.
+    try:
+        values = [float(v) for v in ruw]
+    except (TypeError, ValueError):
+        raise ValueError("frame bevat niet-numerieke waarden")
+    if not all(math.isfinite(v) for v in values):
+        raise ValueError("frame bevat NaN of oneindige waarden")
+    return values
+
+
+def to_matrix(values):
+    """Platte lijst -> 24 rijen van 32 kolommen (rij-majeur)."""
     return [
         values[rij * DEFAULT.width:(rij + 1) * DEFAULT.width]
         for rij in range(DEFAULT.height)
     ]
+
+
+def frame_to_matrix(frame):
+    """Zet een plat 768-frame om naar 24 rijen van 32 kolommen."""
+    return to_matrix(validated_values(frame))
+
+
+def sanitize_values(values, cfg=DEFAULT):
+    """Vervang onmogelijke meetwaarden door de mediaan van het frame.
+
+    De MLX90640 heeft altijd een paar dode pixels; bij een mislukte
+    I2C-read komen er ook uitschieters binnen. Zo'n cel is geen warmtebron
+    maar een kapotte sensor, en mag dus nooit een brand worden. We zetten
+    hem op de mediaan (dus "gewoon" omgevingstemperatuur) in plaats van
+    hem weg te gooien: zo blijft de 32x24-vorm intact en blijft de pixel
+    op zijn plek in het beeld staan.
+    """
+    lo, hi = cfg.valid_temp_min_c, cfg.valid_temp_max_c
+    goed = sorted(v for v in values if lo <= v <= hi)
+    if not goed or len(goed) == len(values):
+        # Alles in orde (geen werk) of alles onzin (dan valt er niets te
+        # vervangen); in het laatste geval blijft het gedrag zoals het was.
+        return list(values)
+    vervanger = goed[len(goed) // 2]
+    return [v if lo <= v <= hi else vervanger for v in values]
+
+
+def sanitize_frame(frame, cfg=DEFAULT):
+    """Zelfde klep, maar op een plat frame (voor /api/frame en de staat)."""
+    return sanitize_values(validated_values(frame), cfg)
 
 
 def estimate_ambient(matrix):
@@ -120,7 +162,7 @@ def find_hotspots(frame, cfg=DEFAULT):
     """
     if not isinstance(cfg, Config):
         raise TypeError("cfg moet een Config zijn")
-    matrix = frame_to_matrix(frame)
+    matrix = to_matrix(sanitize_values(validated_values(frame), cfg))
     ambient = estimate_ambient(matrix)
     threshold = ambient + cfg.threshold_above_ambient
     mask = threshold_mask(matrix, threshold)
