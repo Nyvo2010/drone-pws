@@ -469,3 +469,24 @@ Dus:
 - Datacommunicatie: WiFi access point voor camera en telemetry radio voor GPS/positioning
 - Gebruikte paradigma: combinatie van camera-beeld, thermische hotspotdetectie en GPS-kaartlocatie
 
+## Detectie-ontwerpbeslissingen (Sauron laptopkant, vastgelegd)
+
+- Warmtecamera kijkt RECHT NAAR BENEDEN (pitch vast -90); RGB kijkt VOORUIT.
+  Geen RGB-thermal overlay: kijkrichtingen verschillen, registratie is uit scope.
+- MLX90640 wide-variant als aanname: FOV 110 x 75 graden (instelbaar in `sauron/config.py`).
+- GPS = NMEA (GGA/RMC); seriële poort nog onbekend, `gps_nmea.list_candidate_ports()` helpt zoeken.
+- NMEA-hoogte is MSL; AGL = GPS(nu) - GPS(lancering). Geen geoid-wiskunde nodig (zelfde datum).
+- Locatieformule per hotspot-pixel: pixel -> hoek (FOV) -> grondmeters (tan) ->
+  kompasrotatie (heading, sin/cos) -> lat/lon (platte aarde). Centrum-pixel = recht eronder.
+- Testbereik: 5-30 m AGL, bijna geen wind (geen driftcompensatie).
+- Drempels (startwaarden, kalibreren in het veld): threshold = ambient + 12 C,
+  min-area 3 px, brand bij delta >= 10 C en abs >= 40 C.
+- Implementatie: alleen Python-stdlib (geen numpy/opencv nodig), zie `sauron/` + `main_demo.py`.
+- ALLE processing draait op de laptop (ESP32/FC leveren alleen ruwe data aan).
+- Dashboard: `python3 dashboard.py [--demo]` -> http://localhost:8000 (één HTML-bestand,
+  geen framework, offline). Live RGB-img (ESP32-stream), thermal-canvas (32x24),
+  drone-GPS + hotspot-tabel + logboek; batterij/modus zijn placeholders.
+- Naad voor teamgenoot: POST /api/ingest {frame (768), drone, gps_alt_launch}.
+- Naad voor later autonoom vliegen: State (lezen) -> autonomy.suggest_action (stub, uit).
+  Besturing stuurt nooit hardware aan; commando's lopen via de FC-link.
+
