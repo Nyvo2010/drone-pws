@@ -1,0 +1,825 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=100%, initial-scale=1">
+<title>Sauron</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Mozilla+Headline:wght@700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0a0b;
+    --panel: #111113;
+    --panel2: #0d0d0f;
+    --border: #2a2a2e;
+    --text: #e4e4e7;
+    --muted: #6b6b70;
+    --dim: #4a4a4e;
+    --accent: #ff6b4a;
+    --good: #30d158;
+    --mono: "JetBrains Mono", "SF Mono", Menlo, monospace;
+    --display: "Mozilla Headline", -apple-system, sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ===== Header: alleen logo, compact ===== */
+  header {
+    display: flex;
+    align-items: center;
+    padding: 0 24px;
+    height: 48px;
+    background: var(--panel2);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .logo h1 {
+    font-family: var(--display);
+    font-weight: 700;
+    font-size: 20px;
+    letter-spacing: -0.5px;
+    color: #fff;
+  }
+
+  /* status tucked right */
+  .topbar {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 11px;
+    border-radius: 980px;
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--muted);
+    background: rgba(255,255,255,0.03);
+    border: 1px solid var(--border);
+    white-space: nowrap;
+  }
+
+  .status-pill.live {
+    color: var(--good);
+    border-color: rgba(48,209,88,0.25);
+    background: rgba(48,209,88,0.07);
+  }
+
+  .status-pill .dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+    box-shadow: 0 0 6px currentColor;
+    animation: pulse 2s ease-in-out infinite;
+  }
+
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+  /* ===== Layout: full width ===== */
+  main {
+    padding: 16px 24px 24px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 1fr 1fr;
+    gap: 1px;
+    background: var(--border);
+  }
+
+  /* Camera-cell (bovenste rij, beide kanten) */
+  .cam-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 14px 16px;
+    background: var(--panel);
+    overflow: hidden;
+  }
+
+  .cam-label {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.7px;
+  }
+
+  .cam-label .hint {
+    color: var(--dim);
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: 400;
+    font-family: var(--mono);
+    font-size: 10px;
+  }
+
+  .cam-frame {
+    position: relative;
+    background: #000;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    aspect-ratio: 4 / 3;
+    flex-shrink: 0;
+  }
+
+  .cam-frame img,
+  .cam-frame canvas {
+    width: 100%; height: 100%;
+    object-fit: contain;
+    display: block;
+    image-rendering: pixelated;
+  }
+
+  .cam-fallback {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--dim);
+    font-size: 11px;
+    text-align: center;
+    padding: 16px;
+  }
+
+  .cam-meta {
+    display: flex;
+    gap: 16px;
+    font-size: 10px;
+    color: var(--muted);
+    flex-wrap: wrap;
+  }
+
+  .cam-meta span { display: inline-flex; align-items: center; gap: 4px; }
+  .cam-meta .v { color: var(--text); font-weight: 500; }
+  .cam-meta .hot { color: var(--accent); font-weight: 600; }
+
+  /* ===== Rechter kolom onder: branden ===== */
+  .brand-cell {
+    padding: 14px 16px;
+    background: var(--panel);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    overflow: hidden;
+  }
+
+  .brand-cell h2 {
+    font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.7px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .badge {
+    font-family: var(--mono);
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 980px;
+    background: rgba(255,255,255,0.03);
+    color: var(--muted);
+    border: 1px solid var(--border);
+    white-space: nowrap;
+  }
+
+  .badge.alert {
+    color: var(--accent);
+    border-color: rgba(255,107,74,0.25);
+    background: rgba(255,107,74,0.07);
+  }
+
+  .badge.ok {
+    color: var(--good);
+    border-color: rgba(48,209,88,0.25);
+    background: rgba(48,209,88,0.07);
+  }
+
+  .brand-list {
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 180px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+
+  .brand-list::-webkit-scrollbar { width: 4px; }
+  .brand-list::-webkit-scrollbar-track { background: transparent; }
+  .brand-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 10px;
+    background: var(--panel2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: border-color 120ms ease, background 120ms ease;
+  }
+
+  .brand:hover { border-color: var(--accent); background: rgba(255,107,74,0.04); }
+  .brand.active { border-color: var(--accent); background: rgba(255,107,74,0.08); }
+  .brand.new { animation: in 350ms ease-out; }
+
+  @keyframes in { from { opacity:0; transform:translateY(-2px) } to { opacity:1; transform:none } }
+
+  .brand .left {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .brand .id {
+    font-size: 9px;
+    color: var(--dim);
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    flex-shrink: 0;
+  }
+
+  .brand .temp {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--accent);
+    letter-spacing: -0.5px;
+    flex-shrink: 0;
+  }
+
+  .brand .temp .u {
+    font-size: 10px;
+    color: var(--muted);
+    font-weight: 400;
+    margin-left: 1px;
+  }
+
+  .brand .loc {
+    font-size: 11px;
+    color: var(--text);
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .brand .dist {
+    font-size: 9px;
+    color: var(--dim);
+    margin-left: auto;
+    flex-shrink: 0;
+  }
+
+  /* ===== Expand box (detached, rechtsonder of overlay) ===== */
+  .expand {
+    position: fixed;
+    right: 24px;
+    bottom: 24px;
+    width: 320px;
+    background: var(--panel);
+    border: 1px solid var(--accent);
+    border-radius: 10px;
+    padding: 14px;
+    z-index: 20;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+    display: none;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .expand.open { display: flex; animation: pop 180ms ease-out; }
+
+  @keyframes pop { from { opacity:0; transform:translateY(6px) scale(0.97) } to { opacity:1; transform:none } }
+
+  .expand .x {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 20px; height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    background: rgba(255,255,255,0.04);
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+  }
+
+  .expand .x:hover { background: rgba(255,255,255,0.08); color: var(--text); }
+
+  .expand h3 {
+    font-family: var(--display);
+    font-size: 16px;
+    color: var(--accent);
+    letter-spacing: -0.3px;
+    margin: 0;
+  }
+
+  .expand .row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 11px;
+    color: var(--muted);
+    gap: 12px;
+  }
+
+  .expand .row .k { color: var(--dim); text-transform: uppercase; letter-spacing: 0.4px; font-size: 9px; }
+  .expand .row .v { color: var(--text); font-weight: 500; text-align: right; }
+  .expand .row .v.hot { color: var(--accent); font-weight: 600; }
+
+  .expand .time {
+    font-size: 10px;
+    color: var(--dim);
+    border-top: 1px solid var(--border);
+    padding-top: 8px;
+    margin-top: 2px;
+  }
+
+  /* ===== Linker kolom onder: drone + logs ===== */
+  .left-bottom {
+    display: grid;
+    grid-template-rows: 1fr auto;
+    gap: 1px;
+    background: var(--border);
+    overflow: hidden;
+  }
+
+  .drone-cell {
+    padding: 14px 16px;
+    background: var(--panel);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    overflow: hidden;
+  }
+
+  .drone-cell h2 {
+    font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.7px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .drone-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+    flex: 1;
+    min-height: 0;
+  }
+
+  .dcell {
+    background: var(--panel2);
+    padding: 8px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-height: 0;
+  }
+
+  .dcell .lbl {
+    font-size: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: var(--dim);
+  }
+
+  .dcell .val {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text);
+    letter-spacing: -0.2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .dcell .val.sm { font-size: 11px; color: var(--muted); font-weight: 400; }
+  .dcell .val.accent { color: var(--accent); }
+  .dcell .val.good { color: var(--good); }
+
+  /* ===== Logs (onderin linker kolom) ===== */
+  .logs-cell {
+    padding: 10px 16px;
+    background: var(--panel);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    overflow: hidden;
+  }
+
+  .logs-cell h2 {
+    font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.7px;
+  }
+
+  .log-box {
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    font-size: 10px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+    max-height: 100px;
+  }
+
+  .log-box::-webkit-scrollbar { width: 4px; }
+  .log-box::-webkit-scrollbar-track { background: transparent; }
+  .log-box::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  .log-line {
+    padding: 3px 0;
+    border-bottom: 1px solid rgba(42,42,46,0.3);
+    animation: in 120ms ease-out;
+    display: flex;
+    gap: 8px;
+  }
+
+  .log-line .t {
+    color: var(--dim);
+    font-size: 9px;
+    flex-shrink: 0;
+  }
+
+  .log-line.fire { color: var(--accent); }
+  .log-empty { color: var(--dim); padding: 6px 0; text-align: center; font-size: 10px; }
+
+  /* ===== Battery / modus bar (tussen cameras en onder) ===== */
+  .sysbar {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    padding: 0 16px;
+    height: 36px;
+    background: var(--panel2);
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .sysbar .item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 10px;
+    color: var(--muted);
+  }
+
+  .sysbar .item .k { color: var(--dim); text-transform: uppercase; letter-spacing: 0.4px; font-size: 9px; }
+  .sysbar .item .v { color: var(--text); font-weight: 500; }
+  .sysbar .item .v.good { color: var(--good); }
+  .sysbar .item .v.accent { color: var(--accent); }
+
+  .sysbar .spacer { flex: 1; }
+
+  /* ===== Responsive (smallere schermen) ===== */
+  @media (max-width: 900px) {
+    main { grid-template-columns: 1fr; grid-template-rows: auto auto auto auto; }
+    .cam-cell { grid-row: 1 / 3; }
+    .left-bottom { grid-column: 1; grid-row: 3; }
+    .brand-cell { grid-column: 1; grid-row: 4; }
+    .sysbar { grid-column: 1; }
+    .expand { right: 12px; bottom: 12px; width: 280px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.01ms !important; transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">
+    <h1>Sauron</h1>
+  </div>
+  <div class="topbar">
+    <div class="status-pill" id="status">
+      <span class="dot"></span>
+      <span id="status-text">verbinden…</span>
+    </div>
+  </div>
+</header>
+
+<main>
+  <!-- Cameras: beide boven, full width -->
+  <div class="cam-cell">
+    <div class="cam-label">
+      <span>RGB · vooruitkijk</span>
+      <span class="hint">ESP32 stream</span>
+    </div>
+    <div class="cam-frame">
+      <img id="rgb" alt="" src="">
+      <div class="cam-fallback" id="rgb-fb" style="display:none">geen RGB-verbinding</div>
+    </div>
+  </div>
+
+  <div class="cam-cell">
+    <div class="cam-label">
+      <span>Thermal · omlaag 32×24</span>
+      <span class="hint">MLX90640</span>
+    </div>
+    <div class="cam-frame">
+      <canvas id="thermal" width="128" height="96"></canvas>
+    </div>
+    <div class="cam-meta">
+      <span>max <span class="v hot" id="t-max">—</span>°C</span>
+      <span>omgeving <span class="v" id="t-amb">—</span>°C</span>
+      <span>drempel <span class="v" id="t-thr">—</span>°C</span>
+    </div>
+  </div>
+
+  <!-- System bar -->
+  <div class="sysbar">
+    <div class="item"><span class="k">batterij</span><span class="v" id="s-bat">—</span></div>
+    <div class="item"><span class="k">modus</span><span class="v" id="s-mode">—</span></div>
+    <div class="item"><span class="k">autonomie</span><span class="v" id="s-auto">UIT</span></div>
+    <div class="item"><span class="k">veld</span><span class="v" id="s-veld">5–30 m</span></div>
+    <div class="spacer"></div>
+    <div class="item"><span class="k"> AGL</span><span class="v" id="s-agl">—</span></div>
+    <div class="item"><span class="k">heading</span><span class="v" id="s-heading">—</span></div>
+  </div>
+
+  <!-- Linker kolom onder: drone + logs -->
+  <div class="left-bottom">
+    <div class="drone-cell">
+      <h2>
+        Drone
+        <span class="badge" id="drone-badge">—</span>
+      </h2>
+      <div class="drone-grid">
+        <div class="dcell"><span class="lbl">latitude</span><span class="val sm" id="d-lat">—</span></div>
+        <div class="dcell"><span class="lbl">longitude</span><span class="val sm" id="d-lon">—</span></div>
+        <div class="dcell"><span class="lbl">hoogte MSL</span><span class="val" id="d-alt-msl">—</span></div>
+        <div class="dcell"><span class="lbl">hoogte AGL</span><span class="val" id="d-alt-agl">—</span></div>
+        <div class="dcell"><span class="lbl">heading</span><span class="val sm" id="d-heading">—</span></div>
+        <div class="dcell"><span class="lbl">GPS-fix</span><span class="val sm" id="d-fix">—</span></div>
+        <div class="dcell"><span class="lbl">sats</span><span class="val sm" id="d-sats">—</span></div>
+        <div class="dcell"><span class="lbl">HDOP</span><span class="val sm" id="d-hdop">—</span></div>
+        <div class="dcell"><span class="lbl">warmte</span><span class="val sm" id="d-thermal">—</span></div>
+        <div class="dcell"><span class="lbl">pixels</span><span class="val sm" id="d-pixels">—</span></div>
+      </div>
+    </div>
+
+    <div class="logs-cell">
+      <h2>Logboek <span class="badge" id="log-badge" style="margin-left:auto">0 entries</span></h2>
+      <div class="log-box" id="log-box">
+        <div class="log-empty">—</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Rechter kolom onder: branden -->
+  <div class="brand-cell">
+    <h2>
+      Branden
+      <span class="badge" id="fires-badge">geen</span>
+    </h2>
+    <div class="brand-list" id="brand-list">
+      <div class="empty" style="padding:12px;text-align:center;color:var(--dim);font-size:11px">geen branden gedetecteerd</div>
+    </div>
+  </div>
+</main>
+
+<script>
+const canvas = document.getElementById('thermal');
+const ctx = canvas.getContext('2d');
+const rgb = document.getElementById('rgb');
+const rgbFb = document.getElementById('rgb-fb');
+
+function kleur(t) {
+  t = Math.max(0, Math.min(1, t));
+  const stops = [
+    [13,17,23],[28,55,120],[180,60,45],[255,160,40],[255,240,200]
+  ];
+  const x = t * (stops.length - 1);
+  const i = Math.min(Math.floor(x), stops.length - 2);
+  const f = x - i;
+  return stops[i].map((v,k) => Math.round(v + (stops[i+1][k]-v)*f));
+}
+
+function fmt(v, d=1, s='') {
+  if (v == null) return '—';
+  return v.toFixed(d) + s;
+}
+
+function now() { return new Date().toTimeString().slice(0,8); }
+
+rgb.onerror = () => { rgb.style.display = 'none'; rgbFb.style.display = 'flex'; };
+
+let frameState = null;
+function drawThermal(cells) {
+  if (!cells || cells.length !== 768) return;
+  const mn = Math.min(...cells);
+  const mx = Math.max(...cells);
+  const range = Math.max(mx - mn, 0.001);
+  const img = ctx.createImageData(128, 96);
+  for (let py = 0; py < 96; py++) {
+    for (let px = 0; px < 128; px++) {
+      const tx = Math.floor(px/4), ty = Math.floor(py/4);
+      const v = cells[ty*32+tx];
+      const norm = (v-mn)/range;
+      const [r,g,b] = kleur(norm);
+      const pi = (py*128+px)*4;
+      img.data[pi]=r; img.data[pi+1]=g; img.data[pi+2]=b; img.data[pi+3]=255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  document.getElementById('t-max').textContent = mx.toFixed(1);
+  document.getElementById('t-amb').textContent = fmt(frameState?.thermal?.ambient, 1);
+  document.getElementById('t-thr').textContent = fmt(frameState?.thermal?.threshold, 1);
+}
+
+function setStatus(live, text) {
+  const pill = document.getElementById('status');
+  pill.classList.toggle('live', live);
+  document.getElementById('status-text').textContent = text;
+}
+
+function updateDrone(d, thermalInfo) {
+  document.getElementById('d-lat').textContent = fmt(d.lat, 6);
+  document.getElementById('d-lon').textContent = fmt(d.lon, 6);
+  document.getElementById('d-alt-msl').textContent = fmt(d.alt_msl, 1, ' m MSL');
+  document.getElementById('d-alt-agl').textContent = fmt(d.agl_m, 1, ' m AGL');
+  document.getElementById('d-heading').textContent = fmt(d.heading_deg, 0, '°');
+
+  const fe = document.getElementById('d-fix');
+  if (d.fc_fix != null) {
+    const lab = {0:'geen',1:'2D',2:'3D',3:'3D (RTK)'};
+    fe.textContent = lab[d.fc_fix] || String(d.fc_fix);
+    fe.className = 'val sm ' + (d.fc_fix>=3?'good':d.fc_fix>=2?'':'dim');
+  } else { fe.textContent = '—'; fe.className = 'val sm dim'; }
+
+  document.getElementById('d-sats').textContent = d.fc_sats!=null ? d.fc_sats : '—';
+  document.getElementById('d-hdop').textContent = d.fc_hdop!=null ? d.fc_hdop.toFixed(1) : '—';
+  document.getElementById('d-thermal').textContent = thermalInfo?.ambient!=null ? fmt(thermalInfo.ambient,1)+'°C' : '—';
+  document.getElementById('d-pixels').textContent = thermalInfo?.n_hotspots!=null ? String(thermalInfo.n_hotspots) : '—';
+
+  // Badge AGL
+  const badge = document.getElementById('drone-badge');
+  if (d.agl_m != null) {
+    const a = d.agl_m;
+    if (a < 5 || a > 30) { badge.textContent = a.toFixed(1)+' m AGL ⚠'; badge.className='badge alert'; }
+    else { badge.textContent = a.toFixed(1)+' m AGL'; badge.className='badge ok'; }
+  } else { badge.textContent = '—'; badge.className='badge'; }
+
+  // Sysbar
+  const bat = frameState?.battery;
+  document.getElementById('s-bat').textContent = bat ? bat.voltage_v.toFixed(1)+'V '+bat.percent+'%' : '—';
+  document.getElementById('s-bat').className = 'v' + (bat ? ' good' : '');
+  document.getElementById('s-mode').textContent = frameState?.mode || '—';
+  document.getElementById('s-auto').textContent = frameState?.autonomy?.enabled ? 'AAN' : 'UIT';
+  document.getElementById('s-auto').className = 'v' + (frameState?.autonomy?.enabled ? ' accent' : '');
+  document.getElementById('s-veld').textContent = '5–30 m';
+  document.getElementById('s-agl').textContent = fmt(d.agl_m, 1, ' m');
+  document.getElementById('s-heading').textContent = fmt(d.heading_deg, 0, '°');
+}
+
+function updateBrands(fires) {
+  const list = document.getElementById('brand-list');
+  const badge = document.getElementById('fires-badge');
+
+  if (!fires || fires.length === 0) {
+    list.innerHTML = '<div class="empty" style="padding:12px;text-align:center;color:var(--dim);font-size:11px">geen branden gedetecteerd</div>';
+    badge.textContent = 'geen';
+    badge.className = 'badge ok';
+    return;
+  }
+
+  badge.textContent = fires.length + ' brand(en)';
+  badge.className = 'badge alert';
+
+  list.innerHTML = fires.map((b,i) => {
+    const loc = b.hotspot_lat.toFixed(5) + ', ' + b.hotspot_lon.toFixed(5);
+    return `
+      <div class="brand" data-idx="${i}">
+        <div class="left">
+          <span class="id">brand ${i+1}</span>
+          <span class="temp">${b.max_temp.toFixed(1)}<span class="u">°C</span></span>
+          <span class="loc">${loc}</span>
+        </div>
+        <span class="dist">${b.afstand_m.toFixed(1)} m</span>
+      </div>`;
+  }).join('');
+
+  list.querySelectorAll('.brand').forEach(el => {
+    el.addEventListener('click', (e) => {
+      const idx = parseInt(el.dataset.idx);
+      const b = fires[idx];
+      const wasExpanded = el.classList.contains('expand');
+
+      // Andere eerst collapsen
+      list.querySelectorAll('.brand.expand').forEach(other => other.classList.remove('expand'));
+
+      if (wasExpanded) {
+        el.classList.remove('expand');
+      } else {
+        el.classList.add('expand');
+        let detail = el.querySelector('.expand-detail');
+        if (!detail) {
+          detail = document.createElement('div');
+          detail.className = 'expand-detail';
+          el.appendChild(detail);
+        }
+        detail.innerHTML = `
+          <div class="ed-row"><span class="ed-k">temperatuur</span><span class="ed-v hot">${b.max_temp.toFixed(1)} °C</span></div>
+          <div class="ed-row"><span class="ed-k">stijging</span><span class="ed-v">${b.delta_t.toFixed(1)} °C</span></div>
+          <div class="ed-row"><span class="ed-k">score</span><span class="ed-v">${b.score.toFixed(2)}</span></div>
+          <div class="ed-row"><span class="ed-k">pixels</span><span class="ed-v">${b.area} px</span></div>
+          <div class="ed-row"><span class="ed-k">locatie</span><span class="ed-v">${b.hotspot_lat.toFixed(5)}, ${b.hotspot_lon.toFixed(5)}</span></div>
+          <div class="ed-row"><span class="ed-k">afstand</span><span class="ed-v">${b.afstand_m.toFixed(1)} m</span></div>
+          <div class="ed-time">gedetecteerd om ${now()}</div>
+        `;
+      }
+    });
+  });
+}
+
+function updateLogs(logs) {
+  const box = document.getElementById('log-box');
+  const badge = document.getElementById('log-badge');
+
+  if (!logs || logs.length === 0) {
+    box.innerHTML = '<div class="log-empty">—</div>';
+    badge.textContent = '0 entries';
+    return;
+  }
+
+  const recent = logs.slice(-20);
+  box.innerHTML = recent.map(log => {
+    const fire = log.includes('brand') && log.includes('C op');
+    return `<div class="log-line${fire?' fire':''}"><span class="t">${now()}</span><span>${log}</span></div>`;
+  }).join('');
+  badge.textContent = logs.length + ' entries';
+}
+
+async function tick() {
+  try {
+    const [state, frame] = await Promise.all([
+      fetch('/api/state').then(r=>r.json()),
+      fetch('/api/frame').then(r=>r.json()),
+    ]);
+    frameState = state;
+
+    const live = state.drone.lat != null;
+    setStatus(live,
+      live
+        ? (state.thermal.n_fires ? state.thermal.n_fires+' brand'+(state.thermal.n_fires>1?'en':'') : 'geen branden') + ' · AGL '+fmt(state.drone.agl_m,1)+' m'
+        : 'wachten op verbinding…');
+
+    if (state.rgb_url && rgb.src !== state.rgb_url) rgb.src = state.rgb_url;
+    drawThermal(frame.cells);
+    updateDrone(state.drone, state.thermal);
+    updateBrands(state.fires);
+    updateLogs(state.logs);
+  } catch(e) {
+    setStatus(false, 'geen verbinding');
+  }
+}
+
+setInterval(tick, 1000);
+tick();
+</script>
+</body>
+</html>
