@@ -11,3 +11,6 @@ logs/
 
 # Local tool state
 .freebuff/
+
+# ESP32 temporary info files (not synced, contains reference only)
+Info from esp PWS (temporary)/
