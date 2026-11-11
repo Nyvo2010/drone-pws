@@ -44,7 +44,7 @@ DEFAULT_BASE_URL = "http://192.168.4.1"
 
 
 # Sentinel voor een dode pixel uit /api/data (JSON-null). Buiten het
-# geldige bereik (-20..600 C), zodat thermal.sanitize_frame hem door de
+# geldige bereik (-20..350 C), zodat thermal.sanitize_frame hem door de
 # mediaan van het frame vervangt in plaats van het frame af te wijzen.
 DOOD_PIXEL = -999.0
 
@@ -461,7 +461,7 @@ def parse_data(data, gps_data=None, verwacht=None):
             for waarde in rij:
                 # De firmware schrijft dode pixels als JSON-null. Dat is
                 # geen kapot frame: thermal.sanitize_frame vervangt elke
-                # waarde buiten -20..600 C door de mediaan. Deze sentinel
+                # waarde buiten -20..350 C door de mediaan. Deze sentinel
                 # valt daar precies in, terwijl een echte None/NaN het
                 # hele frame zou laten afwijzen.
                 cellen.append(DOOD_PIXEL if waarde is None
