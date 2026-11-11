@@ -22,6 +22,7 @@ WiFi-access point host) de laptop op zijn LAN-IP bereiken. Wil je hem
 lokaal houden, start dan met --host 127.0.0.1.
 """
 
+import errno
 import json
 import logging
 import socket
@@ -599,7 +600,28 @@ def run(app=None, host="0.0.0.0", port=8000):
     bereiken. Gebruik "127.0.0.1" om de server lokaal te houden.
     """
     app = app or App()
-    server = ThreadingHTTPServer((host, port), make_handler(app))
+    try:
+        server = ThreadingHTTPServer((host, port), make_handler(app))
+    except OSError as fout:
+        # In het veld is dit de meest voorkomende startfout: er draait nog
+        # een dashboard (van een eerdere sessie) op deze poort. Een kale
+        # traceback zegt dan niets bruikbaars, dus leg uit wat er aan de
+        # hand is en wat je eraan doet.
+        app.close()
+        if fout.errno == errno.EADDRINUSE:
+            melding = ("poort %d is al in gebruik: er draait waarschijnlijk "
+                       "nog een dashboard. Stop dat venster (Ctrl+C) of "
+                       "start met een andere poort: python3 dashboard.py "
+                       "--port %d" % (port, port + 1))
+        elif fout.errno == errno.EACCES:
+            melding = ("poort %d mag niet (poorten onder 1024 zijn "
+                       "voorbehouden). Gebruik bijvoorbeeld --port 8000."
+                       % port)
+        else:
+            melding = "kon niet luisteren op %s:%d: %s" % (host, port, fout)
+        print("Sauron start niet: " + melding)
+        _LOG.critical("starten mislukt: %s", melding)
+        raise SystemExit(2)
     print("Sauron dashboard op http://localhost:%d  (Ctrl+C om te stoppen)"
           % port)
     _LOG.info("dashboard luistert op %s:%d", host, port)
