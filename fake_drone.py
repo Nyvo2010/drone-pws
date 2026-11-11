@@ -47,7 +47,9 @@ def zoek_doel(udp_poort, pogingen=3, wachttijd=0.35):
 def bouw_payload(t, met_gps):
     """De body zoals sauronBouwBody() die bouwt (rij-majeur 32x24)."""
     x = 16 + 6 * math.sin(t * 0.3)
-    frame = sim.make_frame(vlekken=[(x, 10, 85.0, 2.5)], seed=t)
+    # 250 C: een echte brand leest op 15 m AGL honderden graden; 85 C zou
+    # volgens de huidige drempels "verdacht" zijn en geen brand melden.
+    frame = sim.make_frame(vlekken=[(x, 10, 250.0, 2.5)], seed=t)
     payload = {"frame": frame}
     if met_gps:
         payload["drone"] = DRONE

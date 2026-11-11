@@ -339,6 +339,11 @@
   .fire.lost .ftemp { color: var(--mute); }
   .fire.lost .fid { color: var(--dim); }
 
+  /* "verdacht": wel heet, maar nog niet in twee frames gezien. */
+  .fire.suspect:not(.lost) { border-color: rgba(255, 159, 10, .35); }
+  .fire.suspect:not(.lost) .ftemp,
+  .fire.suspect:not(.lost) .fid { color: var(--warning); }
+
   .fire-head {
     width: 100%;
     display: grid;
@@ -523,7 +528,7 @@
       <section class="panel camera thermal" id="thermal-panel" aria-labelledby="thermal-title">
         <div class="phead">
           <span class="label" id="thermal-title"><span class="br">[+]</span> thermisch</span>
-          <span class="meta">MLX90640 · 32×24</span>
+          <span class="meta" id="thermal-meta">MLX90640 · 32×24</span>
         </div>
         <div class="camera-body">
           <div class="frame">
@@ -580,6 +585,7 @@
             <div><dt>positie</dt><dd id="d-pos">—</dd></div>
             <div><dt>heading</dt><dd id="d-heading">—</dd></div>
             <div><dt>gps</dt><dd id="d-gps">—</dd></div>
+            <div><dt>verbinding</dt><dd id="d-link">—</dd></div>
             <div><dt>max</dt><dd id="t-max">—</dd></div>
             <div><dt>omgeving</dt><dd id="t-amb">—</dd></div>
             <div><dt>drempel</dt><dd id="t-thr">—</dd></div>
@@ -622,15 +628,21 @@
   const rgbFrame = $("rgb-frame");
   const camrow = $("camrow");
 
+  // Koud = blauw, heet = rood. Zo lees je de temperatuurverdeling in
+  // één oogopslag af in plaats van één kleur met wat ruis.
   const STOPS = [
-    [11, 26, 51],
-    [30, 79, 156],
-    [179, 64, 47],
-    [255, 159, 10],
-    [255, 244, 214],
+    [12, 32, 96],
+    [36, 120, 200],
+    [120, 205, 205],
+    [255, 205, 60],
+    [230, 50, 25],
   ];
 
   let currentFires = [];
+  let lastThermal = null;
+  let lastCells = null;     // laatst getekende frame (voor de labels)
+  let lastSeq = null;       // volgnummer van dat frame
+  let lastFrameT = null;    // wandkloktijd van dat frame (epoch s)
   let expandedKey = null;
   let lastFiresKey = null;
   let lastLogKey = null;
@@ -733,7 +745,24 @@
   }
 
   // ---------- thermal ----------
-  function drawThermal(cells, thermal) {
+  function updateThermalLabels(thermal) {
+    const mx = lastCells ? Math.max(...lastCells) : null;
+    $("t-max").textContent = mx == null ? "—" : fmt(mx, 1, " °C");
+    $("t-amb").textContent = fmt(thermal && thermal.ambient, 1, " °C");
+    $("t-thr").textContent = fmt(thermal && thermal.threshold, 1, " °C");
+
+    const age = lastFrameT != null
+      ? Math.max(0, Date.now() / 1000 - lastFrameT) : null;
+    const meta = $("thermal-meta");
+    meta.textContent = "MLX90640 · 32×24"
+      + (lastSeq != null ? " · #" + lastSeq : "")
+      + (age != null ? " · " + ageText(age) : "");
+    meta.classList.toggle("alert", age != null && age > 2.5);
+  }
+
+  // Alleen tekenen als er écht een nieuw frame is (seq). Zo blijft het beeld
+  // synchroon met de ESP32 en kost een herhaal-poll geen rekenwerk.
+  function drawThermal(cells, thermal, seq, frameTime) {
     const empty = $("thermal-empty");
     const ok = Array.isArray(cells) && cells.length === 768;
 
@@ -741,22 +770,42 @@
       ctx.fillStyle = "#060607";
       ctx.fillRect(0, 0, W, H);
       empty.hidden = false;
-      $("t-max").textContent = "—";
-      $("t-amb").textContent = "—";
-      $("t-thr").textContent = "—";
+      lastCells = null;
+      lastSeq = null;
+      lastFrameT = null;
+      updateThermalLabels(thermal);
       return;
     }
     empty.hidden = true;
+    if (seq != null && seq === lastSeq) {
+      updateThermalLabels(thermal);
+      return;
+    }
+    lastCells = cells;
+    lastSeq = seq == null ? null : seq;
+    lastFrameT = frameTime == null ? Date.now() / 1000 : frameTime;
 
-    const mn = Math.min(...cells);
-    const mx = Math.max(...cells);
-    const ambient = thermal && thermal.ambient != null ? thermal.ambient : mn;
-
-    // Vaste, begrensde schaal: ruis wordt niet opgerekt tot een nep-brand,
-    // maar een echte uitschieter blijft zichtbaar.
-    const lo = ambient - 5;
-    const hi = Math.max(mx, ambient + 40);
-    const span = Math.max(hi - lo, 0.1);
+    // Autogain op percentielen (2%..98%), niet op min..max. Met min..max
+    // trok één hete pixel de hele schaal naar boven en werd het veld
+    // volledig donkerblauw; met "ambient - 5 .. ambient + 40" gebeurde
+    // hetzelfde. Nu verdeelt het normale veld zich over blauw -> rood en
+    // klippen echte uitschieters op rood. Een vlak veld krijgt een
+    // minimale spanne van 2 C, zodat het niet als één kleurblok oogt.
+    const gesorteerd = cells.slice().sort((a, b) => a - b);
+    const percentiel = (q) => gesorteerd[
+      Math.min(gesorteerd.length - 1,
+               Math.max(0, Math.round(q * (gesorteerd.length - 1))))
+    ];
+    let lo = percentiel(0.02);
+    let hi = percentiel(0.98);
+    // Minimaal 4 C span: anders schaalt gewone sensorruis het hele veld
+    // van blauw naar oranje en lijkt een koud weiland "heet".
+    if (hi - lo < 4) {
+      const midden = (lo + hi) / 2;
+      lo = midden - 2;
+      hi = midden + 2;
+    }
+    const span = hi - lo;
 
     for (let y = 0; y < 24; y++) {
       for (let x = 0; x < 32; x++) {
@@ -765,32 +814,119 @@
       }
     }
 
-    // Heetste pixel van elke brand: wit kader, donkere kern.
+    // Heetste pixel van elke brand: wit kader (bevestigd) of amber
+    // streepjes (verdacht), met een donkere kern op de pixel zelf.
     for (const f of currentFires) {
       if (f.status !== "active") continue;
       if (f.x == null || f.y == null) continue;
+      const zeker = f.confirmed !== false;
       ctx.lineWidth = 2;
-      ctx.strokeStyle = "#ececef";
+      ctx.setLineDash(zeker ? [] : [3, 2]);
+      ctx.strokeStyle = zeker ? "#ececef" : "#ff9f0a";
       ctx.strokeRect(f.x * CW + 1, f.y * CH + 1, CW - 2, CH - 2);
+      ctx.setLineDash([]);
       ctx.lineWidth = 1;
       ctx.strokeStyle = "#0b0b0d";
       ctx.strokeRect(f.x * CW + CW / 2 - 1, f.y * CH + CH / 2 - 1, 2, 2);
     }
 
-    $("t-max").textContent = fmt(mx, 1, " °C");
-    $("t-amb").textContent = fmt(thermal && thermal.ambient, 1, " °C");
-    $("t-thr").textContent = fmt(thermal && thermal.threshold, 1, " °C");
+    updateThermalLabels(thermal);
   }
 
   // ---------- rgb ----------
-  function setRgb(url) {
-    if (!url || url === rgbUrl) return;
-    rgbUrl = url;
-    $("rgb-url").textContent = url.replace(/^https?:\/\//, "");
-    $("rgb").src = url;
+  // De firmware stuurt MJPEG met een Content-Length per frame. Een
+  // <img src=".../stream"> laat de browser zelf bufferen: na een hapering
+  // blijven oude frames staan en loopt het beeld achter. Daarom lezen we
+  // de stream hier zelf uit en tonen we per keer alleen het nieuwste
+  // frame; wat ouder in de buffer ligt gaat weg in plaats van in beeld.
+  const rgbImg = $("rgb");
+  let rgbStop = null;
+  let rgbObjectUrl = null;
+  let rgbFrameAt = 0;
+  let rgbPending = null;    // nieuwste ontvangen frame, nog niet getekend
+  let rgbRendered = null;   // laatst getekende frame
+
+  function rgbShow(bytes) {
+    const url = URL.createObjectURL(new Blob([bytes], { type: "image/jpeg" }));
+    const vorige = rgbObjectUrl;
+    rgbObjectUrl = url;
+    rgbFrameAt = Date.now();
+    rgbImg.src = url;
+    $("rgb-fb").hidden = true;
+    if (vorige) URL.revokeObjectURL(vorige);
   }
 
-  $("rgb").addEventListener("load", (ev) => {
+  function rgbHeaderEnd(buf) {
+    for (let i = 0; i + 3 < buf.length; i++) {
+      if (buf[i] === 13 && buf[i + 1] === 10 &&
+          buf[i + 2] === 13 && buf[i + 3] === 10) return i;
+    }
+    return -1;
+  }
+
+  async function rgbPump(url, signal) {
+    const res = await fetch(url, { cache: "no-store", signal });
+    if (!res.ok || !res.body) throw new Error("stream " + res.status);
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = new Uint8Array(0);
+
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (value && value.length) {
+        const samen = new Uint8Array(buf.length + value.length);
+        samen.set(buf, 0);
+        samen.set(value, buf.length);
+        buf = samen;
+      }
+
+      let nieuwste = null;
+      for (;;) {
+        const end = rgbHeaderEnd(buf);
+        if (end < 0) break;                      // header nog niet compleet
+        const kop = decoder.decode(buf.subarray(0, end));
+        const m = /content-length:\s*(\d+)/i.exec(kop);
+        if (!m) {                                // ruis/boundary: overslaan
+          buf = buf.subarray(end + 4);
+          continue;
+        }
+        const start = end + 4;
+        const lengte = Number(m[1]);
+        if (buf.length < start + lengte) break;  // frame nog niet compleet
+        nieuwste = buf.subarray(start, start + lengte);
+        buf = buf.subarray(start + lengte);
+      }
+      // Meerdere frames in één read: alleen het laatste bewaren, de rest
+      // is al oud tegen de tijd dat het canvas bijwerkt.
+      if (nieuwste) rgbPending = nieuwste;
+    }
+  }
+
+  function rgbStart(url) {
+    if (!url) return;
+    if (rgbStop && url === rgbUrl) return;
+    rgbUrl = url;
+    $("rgb-url").textContent = url.replace(/^https?:\/\//, "");
+    if (rgbStop) rgbStop();
+    const controle = new AbortController();
+    rgbStop = () => controle.abort();
+
+    (async () => {
+      while (!controle.signal.aborted) {
+        try {
+          await rgbPump(url, controle.signal);
+        } catch (err) {
+          if (controle.signal.aborted) return;
+        }
+        if (controle.signal.aborted) return;
+        $("rgb-fb").hidden = false;
+        await new Promise((klaar) => setTimeout(klaar, 1000));
+      }
+    })();
+  }
+
+  rgbImg.addEventListener("load", (ev) => {
     $("rgb-fb").hidden = true;
     const img = ev.currentTarget;
     if (img.naturalWidth && img.naturalHeight) {
@@ -799,11 +935,36 @@
       layoutCameras();
     }
   });
-  $("rgb").addEventListener("error", () => { $("rgb-fb").hidden = false; });
+  rgbImg.addEventListener("error", () => { $("rgb-fb").hidden = false; });
+
+  // Vaste weergavecadans: de firmware heeft geen pacing in de stream, dus
+  // frames komen in bursts. Direct bij ontvangst tekenen geeft schokken;
+  // 15x per seconde het nieuwste frame tekenen loopt gelijkmatig en kost
+  // nooit meer dan één decode per stap.
+  setInterval(() => {
+    if (!rgbPending || rgbPending === rgbRendered) return;
+    if (document.hidden) return;
+    rgbRendered = rgbPending;
+    rgbShow(rgbPending);
+  }, 66);
+
+  // Stream die stilvalt (WiFi weg) weer op gang brengen met een nieuwe fetch.
+  setInterval(() => {
+    if (!rgbUrl || !rgbFrameAt) return;
+    if (Date.now() - rgbFrameAt <= 3000) return;
+    $("rgb-fb").hidden = false;
+    const url = rgbUrl;
+    rgbStop();
+    rgbUrl = null;
+    rgbStart(url);
+  }, 1000);
+
   $("rgb-reload").addEventListener("click", () => {
     if (!rgbUrl) return;
-    const sep = rgbUrl.includes("?") ? "&" : "?";
-    $("rgb").src = rgbUrl + sep + "t=" + Date.now();
+    const url = rgbUrl;
+    if (rgbStop) rgbStop();
+    rgbUrl = null;
+    rgbStart(url);
   });
 
   $("new-flight").addEventListener("click", async () => {
@@ -830,6 +991,22 @@
     if (d.fc_fix != null) parts.push(FIX_LABELS[d.fc_fix] || String(d.fc_fix));
     if (d.fc_sats != null) parts.push(d.fc_sats + " sat");
     if (d.fc_hdop != null) parts.push(Number(d.fc_hdop).toFixed(1) + " hdop");
+    // Oude positie: wel zichtbaar, maar er komen geen coördinaten meer uit.
+    if (d.gps_age_s != null && d.gps_age_s >= 2) {
+      parts.push(Math.round(d.gps_age_s) + " s oud");
+    }
+    return parts.length ? parts.join(" · ") : "—";
+  }
+
+  // Linkkwaliteit: hoeveel polls van de laatste minuut goed gingen. Een
+  // zwakke ESP32-link is normaal; de operator moet kunnen zien of het beeld
+  // echt is of dat er frames ontbreken.
+  function linkText(l) {
+    if (!l) return "—";
+    const parts = [];
+    if (l.ok_pct != null) parts.push(Math.round(l.ok_pct) + "% polls");
+    if (l.latency_ms != null) parts.push(Math.round(l.latency_ms) + " ms");
+    if (l.misses) parts.push(l.misses + " mislukt");
     return parts.length ? parts.join(" · ") : "—";
   }
 
@@ -846,6 +1023,10 @@
       : "—";
     $("d-heading").textContent = fmt(d.heading_deg, 0, "°");
     $("d-gps").textContent = gpsText(d);
+    $("d-link").textContent = linkText(state.link);
+    $("d-link").classList.toggle(
+      "warn", !!(state.link && state.link.ok_pct != null
+                 && state.link.ok_pct < 80));
 
     const badge = $("fix-badge");
     const fixOk = d.fc_fix != null && d.fc_fix >= 2;
@@ -888,10 +1069,18 @@
     const list = $("fire-list");
     list.textContent = "";
     const count = fires ? fires.length : 0;
-    const activeCount = fires
-      ? fires.filter((f) => f.status === "active").length : 0;
-    $("fires-badge").textContent = "[" + count + "]";
-    $("fires-badge").className = "meta" + (activeCount ? " alert" : "");
+    const bevestigd = fires
+      ? fires.filter((f) => f.status === "active" && f.confirmed !== false).length
+      : 0;
+    const verdacht = fires
+      ? fires.filter((f) => f.status === "active" && f.confirmed === false).length
+      : 0;
+    $("fires-badge").textContent = "[" + bevestigd + "]"
+      + (verdacht ? " ?" + verdacht : "");
+    $("fires-badge").title = bevestigd + " bevestigd, " + verdacht
+      + " nog niet bevestigd";
+    $("fires-badge").className = "meta"
+      + ((bevestigd + verdacht) ? " alert" : "");
 
     if (!fires || count === 0) {
       list.appendChild(el("div", "empty", "[ ] geen branden"));
@@ -903,16 +1092,18 @@
       const fk = fireKey(f, i);
       const open = fk === expandedKey;
       const active = f.status ? f.status === "active" : true;
+      const zeker = f.confirmed !== false;
 
       const card = el("div", "fire" + (open ? " open" : "")
-        + (active ? "" : " lost"));
+        + (active ? "" : " lost") + (zeker ? "" : " suspect"));
 
       const head = el("button", "fire-head");
       head.type = "button";
       head.setAttribute("aria-expanded", String(open));
 
       head.appendChild(el("span", "fid",
-        (active ? "[!] " : "[ ] ") + (f.id || ("B" + (i + 1)))));
+        (active ? (zeker ? "[!] " : "[?] ") : "[ ] ")
+        + (f.id || ("B" + (i + 1)))));
 
       const main = el("span", "fmain");
       const temp = el("span", "ftemp", fmt(f.max_temp, 1));
@@ -939,6 +1130,7 @@
         const detail = el("div", "fire-detail");
         const rows = [
           ["status", active ? "in beeld" : "uit beeld"],
+          ["zekerheid", zeker ? "bevestigd" : "nog niet bevestigd"],
           ["laatst", clock(f.last_seen)],
           ["eerste", clock(f.first_seen)],
           ["metingen", String(f.observations)],
@@ -1038,10 +1230,11 @@
       ]);
 
       currentFires = state.fires || [];
+      lastThermal = state.thermal;
 
       renderStatus(state);
-      drawThermal(frame.cells, state.thermal);
-      setRgb(state.rgb_url);
+      drawThermal(frame.cells, state.thermal, frame.seq, frame.t);
+      rgbStart(state.rgb_url);
       renderTelemetry(state);
       renderFires(currentFires);
       renderLogs(state);
@@ -1052,10 +1245,24 @@
     }
   }
 
+  // Het warmtebeeld ververst op de ESP32 op 8 Hz; de staat, branden en
+  // het logboek 1x per seconde. Deze lus haalt alleen /api/frame op, ruim
+  // zes keer per seconde, en plant zichzelf pas opnieuw in als het vorige
+  // verzoek klaar is: trage antwoorden stapelen niet op.
+  async function thermalTick() {
+    try {
+      const frame = await fetch("/api/frame", { cache: "no-store" })
+        .then((r) => r.json());
+      drawThermal(frame.cells, lastThermal, frame.seq, frame.t);
+    } catch (err) { /* volgende ronde opnieuw */ }
+    setTimeout(thermalTick, 150);
+  }
+
   layoutCameras();
   requestAnimationFrame(layoutCameras);
   setInterval(tick, 1000);
   tick();
+  thermalTick();
 })();
 </script>
 </body>

@@ -547,3 +547,109 @@ Dus:
   sauron.replay <bestand>` hertunet drempels offline op echte velddata en
   telt pixels buiten het geldige bereik.
 
+## Firmware van de drone (bron: `Info from esp PWS (temporary)/`)
+
+Het bord **POST niets**; het serveert GET-endpoints. De laptop moet dus
+pollen, anders blijft het thermische canvas leeg.
+
+- `:80/api/data` — `{"thermal_available":bool,"frame":[768]|null,
+  "thermal":{"min_c","max_c","hotspot":{"x","y"}},"drone":{...}}`.
+  Het frame wordt elke 125 ms (8 Hz) herbouwd; dode pixels zijn JSON-null.
+  `drone` verschijnt alleen bij een geldige positie.
+- `:80/api/gps` — `{"data_seen","location_valid","lat","lon","alt_msl",
+  "heading_deg","speed_mps","fix","sats","hdop"}`, met nulls zonder fix.
+- `:80/api/status` — wifi/camera/thermal/gps/stream-tellers.
+- `:80/capture` — één JPEG; `:81/stream` — MJPEG met Content-Length per frame.
+- **fixType is UBX NAV-PVT** (3 = 3D, 2 = 2D), niet de NMEA-schaal van het
+  dashboard. `esp32.normaliseer_fix()` rekent om; anders zou een 2D-fix
+  als 3D doorgaan en met een verzonnen AGL coördinaten geven.
+- `sauronSetLaunchMsl()` wordt nooit aangeroepen, dus `gps_alt_launch` komt
+  nooit mee. De laptop zet de eerste bruikbare GPS-hoogte als lanceerpunt
+  (of `--launch-alt` voor een exacte AGL).
+- De JSON-buffer wordt in `loop()` herschreven terwijl de http-taak hem
+  verstuurt: soms komt er een half antwoord. De poller vraagt dan binnen
+  100 ms opnieuw in plaats van een halve interval te verliezen.
+- Het bord is AP-only (`WiFi.softAP`, `BosbrandDrone`), dus de laptop moet
+  in dat netwerk zitten om iets te kunnen ontvangen.
+
+## Detectie herbouwd + lokale logging (11 nov)
+
+Aanleiding: in `logs/flight-20261030-135142.jsonl` staat een frame met
+mediaan 486 C en 137 "branden"; losse 3-pixelclusters van 565 C kwamen als
+brand door. In het veld werd een zonverwarmde steen (43 C bij 26 C
+omgeving) gemeld. De oude regel (omgeving + 10 C, absoluut 40 C) keurt
+alles goed wat warmer is dan een schaduwplek.
+
+- Classificatie is tweestandig: **brand** = >= 90 C EN >= 45 C boven de
+  mediaan; **verdacht** = >= 60 C EN >= 30 C. Zonverwarmde stenen,
+  dakpannen en asfalt halen 55-70 C en vallen dus af. Een vuur op 15 m
+  AGL leest honderden graden in de heetste pixel (1 pixel is daar ~1,3 x
+  1,0 m grond).
+- `valid_temp_max_c` = 350: de sensor is gespecificeerd tot 300 C, alles
+  daarboven is een leesfout en wordt door de mediaan vervangen.
+- Frame-plausibiliteit: mediaan buiten -15..70 C of meer dan 15% van de
+  pixels op de sensorgrens => `sensor_warning`, geen branden. Hotspots
+  blijven zichtbaar als diagnose, zodat je ziet wat de sensor zag.
+- Tijdsconsistentie: een track is pas "bevestigd" na
+  `confirm_observations` (2) metingen; daarvoor staat hij als "verdacht"
+  in de UI (amber stippellijn op het canvas). `n_fires` telt alleen
+  bevestigde tracks, `n_suspects` de rest.
+- Frames hebben een volgnummer (`frame_seq`) + tijd. `/api/frame` geeft
+  `seq` en `t` mee; de UI tekent alleen een écht nieuw frame en toont de
+  leeftijd van het beeld in de paneelkop (rood na 2,5 s).
+- Logging is lokaal en volledig: `logs/dashboard-YYYYMMDD.log` bevat
+  elke UI-logregel, de start, camera-opzet, linkstatistieken, fouten en
+  onafgevangen exceptions (ook uit threads). Het vluchtbestand heeft per
+  ingest `seq`, `frame_time`, `link` (latentie/missers) en `esp32`
+  (`thermal_available`, min/max/hotspot, `/api/gps`). `--capture` bewaart
+  de ruwe 768 waarden; `--capture-rgb SEC` bewaart JPEG's in `logs/rgb/`.
+- Verbinding: `Esp32` houdt de HTTP-verbinding open (keep-alive) en
+  probeert een mislukte hergebruikte verbinding één keer opnieuw. De
+  poll-lus heeft een vaste cadans, vraagt een half antwoord meteen
+  opnieuw, heeft backoff tot 2 s en logt bij 3 missers de echte oorzaak
+  via `esp32.diagnose` (timeout / weigert / hangt).
+- Camera: bij de stock CameraWebServer worden 480x320 en kwaliteit 10
+  automatisch gezet en teruggelezen (`--camera-size`, `--camera-quality`,
+  `--no-camera-setup`). De eigen firmware heeft geen `/status` of
+  `/control`; dat wordt één keer gelogd en overgeslagen.
+- Bug gevonden en gerepareerd: het veld `nmea` in `/api/ingest` werd nooit
+  geparseerd, waardoor de gedocumenteerde GPS-route via de firmware dood
+  was. Nu vult `gps_nmea.parse_nmea_block` lat/lon/hoogte/fix/sats/hdop/
+  koers aan; GGA-kwaliteit 1 wordt dashboardschaal 2 (3D).
+- Starten (vanaf de repo-root): `python3 dashboard.py` (echt, pollt
+  `http://192.168.4.1`), `python3 dashboard.py --demo` (zonder hardware),
+  `python3 selftest.py` (keten + bord controleren).
+
+## Zwakke ESP32-link: wat de software dan doet (11 nov)
+
+De verbinding is in het veld niet constant. De regel is: **liever een gat
+in het beeld dan een verkeerde melding**.
+
+- **Trage sensorread ≠ dode link.** Verbinden heeft een korte timeout
+  (1,5 s), lezen een ruime (4 s). Met één gedeelde timeout werden frames
+  weggegooid die er wel waren (de ESP32 doet MLX90640-reads en JPEG-encodes
+  in dezelfde loop).
+- **Afgekapt frame = gemiste poll.** `parse_data` eist precies 768
+  waarden; een half antwoord levert `None` en de lus vraagt het meteen
+  opnieuw (50 ms), in plaats van een ingest-afwijzing te loggen.
+- **Oude positie geeft geen coördinaten.** `/api/gps` komt op 1 Hz; valt
+  die weg, dan blijft het warmtebeeld doorkomen. Na
+  `max_position_age_s` (3 s) meldt de brand zich zonder coördinaten met
+  "positie is N s oud"; de laatste positie blijft zichtbaar met leeftijd
+  (`drone.gps_age_s`, in de UI "N s oud").
+- **Verse wint van oude.** Een `drone`-blok in `/api/data` is per frame
+  vers en wint daarom van de 1 Hz-cache van `/api/gps`.
+- **Identiek frame is geen meting.** Een bevroren sensorread of een
+  dubbel afgeleverd antwoord mag een brand niet bevestigen: exact dezelfde
+  768 waarden verhogen `observations` niet (het frame telt wel voor de
+  weergave en krijgt een `seq`). In het logboek: "identiek frame (N×)".
+- **Diagnose blokkeert niet meer.** Bij de derde misser draait
+  `esp32.diagnose` op een eigen thread en zonder het requestslot, zodat
+  het pollen doorgaat op het moment dat herstel telt.
+- **Zichtbaarheid.** `link` in `/api/state` bevat `ok_pct` (aandeel goede
+  polls van de laatste 60), `latency_ms` en `misses`; de UI toont ze als
+  "verbinding" in de telemetrie (amber onder 80%).
+- **Bug gefixt:** de 30-seconden-linkregel in `esp32_loop` verwees naar
+  `latentties` (typefout) en zou na 30 s de poll-thread met een NameError
+  hebben laten stoppen — precies tijdens een vlucht.
+

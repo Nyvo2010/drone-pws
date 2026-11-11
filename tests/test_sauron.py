@@ -16,8 +16,8 @@ from pathlib import Path
 
 sys.path.insert(0, ".")  # run vanaf repo-root: import sauron...
 
-from sauron import (autonomy, classify, geo, gps_nmea, pipeline, replay, server,
-                    sim, state, thermal)
+from sauron import (autonomy, classify, esp32, geo, gps_nmea, pipeline, replay,
+                    server, sim, state, thermal)
 from sauron.config import DEFAULT
 from sauron.flightlog import FlightRecorder
 from sauron.tracking import FireTracker
@@ -44,7 +44,7 @@ def test_ambient_is_mediaan():
 
 def test_vlek_wordt_gevonden():
     ambient, drempel, hotspots = thermal.find_hotspots(
-        sim.make_frame(vlekken=[(20, 8, 85.0, 2.0)]))
+        sim.make_frame(vlekken=[(20, 8, 250.0, 2.0)]))
     assert len(hotspots) >= 1, "vlek van 85 C moet gevonden worden"
     heetste = hotspots[0]
     assert abs(heetste["x"] - 20) <= 1 and abs(heetste["y"] - 8) <= 1
@@ -59,12 +59,34 @@ def test_leeg_veld_geen_hotspot():
 
 
 def test_classificatie_brand_en_geen_brand():
-    brand = classify.classify_hotspot({"max_temp": 85.0, "area": 10}, 22.0)
-    assert brand["is_fire"], "85 C bij 22 C omgeving = brand"
+    # Echte brandtemperatuur: een kampvuur op 15 m AGL leest honderden
+    # graden in de heetste pixel.
+    brand = classify.classify_hotspot({"max_temp": 250.0, "area": 10}, 22.0)
+    assert brand["is_fire"], "250 C bij 22 C omgeving = brand"
+    assert brand["level"] == "fire"
     assert set(brand["reasons"]) == {"stijging_boven_omgeving",
                                      "absoluut_warm_genoeg", "groot_genoeg"}
     koud = classify.classify_hotspot({"max_temp": 30.0, "area": 10}, 22.0)
     assert not koud["is_fire"], "8 C stijging is te weinig voor brand"
+    assert koud["level"] == "noise"
+
+
+def test_steen_is_geen_brand():
+    # Dit is de veldfout van 30 okt: een zonverwarmde steen (43 C bij een
+    # omgeving van 26 C) werd als brand gemeld. Zonverwarmde stenen,
+    # dakpannen en asfalt halen 55-70 C, dus alleen absolute hitte plus
+    # een grote sprong boven de omgeving telt als brand.
+    steen = classify.classify_hotspot({"max_temp": 43.1, "area": 3}, 25.9)
+    assert not steen["is_fire"], "steen van 43 C is geen brand"
+    assert steen["level"] == "noise"
+
+    warme_steen = classify.classify_hotspot({"max_temp": 64.0, "area": 9}, 25.0)
+    assert not warme_steen["is_fire"], "zonverwarmde steen van 64 C is geen brand"
+    assert warme_steen["level"] == "suspect", "wel een verdacht warm voorwerp"
+
+    # Een echt brandje dichtbij (bijna volle pixel) is wel een brand.
+    vuur = classify.classify_hotspot({"max_temp": 180.0, "area": 4}, 25.0)
+    assert vuur["is_fire"]
 
 
 def test_meerdere_hotspots_gesorteerd():
@@ -107,7 +129,7 @@ def test_pixel_vooruit_schuift_noord():
 
 
 def test_pipeline_eind_tot_eind():
-    frame = sim.make_frame(vlekken=[(20, 8, 85.0, 2.0)])
+    frame = sim.make_frame(vlekken=[(20, 8, 250.0, 2.0)])
     r = pipeline.detect_event(frame, 52.09, 4.31, 90.0, 25.0, 10.0)
     assert r["n_fires"] == 1, "verwacht precies 1 brand, kreeg %d" % r["n_fires"]
     brand = r["fires"][0]
@@ -134,7 +156,7 @@ def test_frame_met_ongeldige_waarden_is_fout():
 def test_agl_nul_meldt_brand_zonder_locatie():
     # Op de grond is er geen geldige driehoek. De brand moet wel gemeld
     # worden (met waarschuwing), maar zonder verzonnen coördinaten.
-    frame = sim.make_frame(vlekken=[(20, 8, 85.0, 2.0)])
+    frame = sim.make_frame(vlekken=[(20, 8, 250.0, 2.0)])
     r = pipeline.detect_event(frame, 52.09, 4.31, 90.0, 10.0, 10.0)
     assert r["n_fires"] == 1, "brand blijft zichtbaar op AGL 0"
     brand = r["fires"][0]
@@ -158,7 +180,7 @@ def test_state_legt_tijdstippen_vast():
 def _brand(offset_lat=0.0):
     """Eén geclassificeerde brand uit de echte pipeline (vaste seed)."""
     resultaat = pipeline.detect_event(
-        sim.make_frame(vlekken=[(20, 8, 85.0, 2.5)]),
+        sim.make_frame(vlekken=[(20, 8, 250.0, 2.5)]),
         52.09, 4.31, 90.0, 25.0, 10.0,
     )
     brand = dict(resultaat["fires"][0])
@@ -173,14 +195,17 @@ def test_tracking_zelfde_brand_geen_duplicaat():
     assert len(eerste) == 1
     assert eerste[0]["id"] == "B1"
     assert eerste[0]["observations"] == 1
+    assert eerste[0]["confirmed"] is False, "één frame is nog niet bevestigd"
     assert [e["type"] for e in events] == ["new"]
 
-    # Zelfde brand, volgende frame: dezelfde track, geen nieuw ID.
+    # Zelfde brand, volgende frame: dezelfde track, geen nieuw ID, en na
+    # twee metingen is de track bevestigd.
     tweede, events = tracker.update([dict(brand)], now=1.0)
     assert len(tweede) == 1
     assert tweede[0]["id"] == "B1"
     assert tweede[0]["observations"] == 2
-    assert events == [], "geen duplicaat en geen ruis-event"
+    assert tweede[0]["confirmed"] is True
+    assert [e["type"] for e in events] == ["confirmed"]
 
 
 def test_tracking_uit_beeld_en_terug():
@@ -204,7 +229,8 @@ def test_tracking_uit_beeld_en_terug():
     assert len(terug) == 1
     assert terug[0]["id"] == "B1"
     assert terug[0]["status"] == "active"
-    assert [e["type"] for e in events] == ["reacquired"]
+    assert terug[0]["confirmed"] is True
+    assert [e["type"] for e in events] == ["reacquired", "confirmed"]
 
 
 def test_tracking_andere_locatie_is_nieuwe_brand():
@@ -277,16 +303,34 @@ def test_vlucht_recorder_jsonl():
         assert recorder.path_for("../evil.jsonl") is None
 
 
+def _ander(frame, delta=0.1):
+    """Kopie met één cel iets anders: een échte nieuwe meting.
+
+    Twee identieke frames gelden bewust niet als twee metingen (bevroren
+    sensorread of dubbel afgeleverd antwoord), dus tests die bevestiging
+    willen moeten een nieuwe meting sturen — precies zoals de sensor dat
+    zelf doet.
+    """
+    kopie = list(frame)
+    kopie[0] = kopie[0] + delta
+    return kopie
+
+
 def test_app_logt_vlucht_en_reset():
     with tempfile.TemporaryDirectory() as map_naam:
         recorder = FlightRecorder(map_naam)
         app = server.App(recorder=recorder)
-        frame = sim.make_frame(vlekken=[(20, 8, 85.0, 2.5)])
+        frame = sim.make_frame(vlekken=[(20, 8, 250.0, 2.5)])
         drone = {"lat": 52.09, "lon": 4.31, "alt_msl": 25.0,
                  "heading_deg": 90.0, "fix": 3, "sats": 9, "hdop": 0.8}
-        uit = app.ingest(frame, drone, 10.0)
+        eerste = app.ingest(frame, drone, 10.0)
+        assert eerste["n_fires"] == 0, "één frame is nog niet bevestigd"
+        assert eerste["fires"][0]["confirmed"] is False
+        uit = app.ingest(_ander(frame), drone, 10.0)
         assert uit["n_fires"] == 1
         assert uit["fires"][0]["id"] == "B1"
+        assert uit["fires"][0]["confirmed"] is True
+        assert uit["seq"] == 2, "elk frame krijgt een volgnummer"
         assert app.snapshot()["flight"] is not None
 
         app.new_flight()
@@ -318,16 +362,22 @@ def test_server_api_eind_tot_eind():
     try:
         with urllib.request.urlopen(basis + "/") as r:
             assert "Sauron" in r.read().decode("utf-8"), "dashboard-HTML"
-        body = json.dumps({
-            "frame": sim.make_frame(vlekken=[(20, 8, 85.0, 2.5)]),
-            "drone": {"lat": 52.09, "lon": 4.31,
-                      "alt_msl": 25.0, "heading_deg": 90.0},
-            "gps_alt_launch": 10.0,
-        }).encode("utf-8")
-        req = urllib.request.Request(basis + "/api/ingest", data=body,
-                                     headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req) as r:
-            antwoord = json.loads(r.read().decode("utf-8"))
+        thermisch = sim.make_frame(vlekken=[(20, 8, 250.0, 2.5)])
+        drone = {"lat": 52.09, "lon": 4.31,
+                 "alt_msl": 25.0, "heading_deg": 90.0}
+        # Twee frames: een brand is pas bevestigd na twee metingen, en het
+        # tweede frame is een nieuwe meting (identieke frames tellen niet).
+        antwoord = None
+        for meting_nr in range(2):
+            meting = list(thermisch)
+            meting[0] += 0.1 * meting_nr
+            body = json.dumps({"frame": meting, "drone": drone,
+                               "gps_alt_launch": 10.0}).encode("utf-8")
+            req = urllib.request.Request(
+                basis + "/api/ingest", data=body,
+                headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req) as r:
+                antwoord = json.loads(r.read().decode("utf-8"))
         assert antwoord["ok"] and antwoord["n_fires"] == 1
         with urllib.request.urlopen(basis + "/api/state") as r:
             staat = json.loads(r.read().decode("utf-8"))
@@ -344,8 +394,10 @@ def test_server_api_eind_tot_eind():
 
         # Meting op de grond (AGL 0): brand melden zonder locatie mag
         # geen serverfout geven (de logregel crashte hier eerder op).
+        laag = list(thermisch)
+        laag[0] += 0.2
         body2 = json.dumps({
-            "frame": sim.make_frame(vlekken=[(20, 8, 85.0, 2.5)]),
+            "frame": laag,
             "drone": {"lat": 52.09, "lon": 4.31,
                       "alt_msl": 10.0, "heading_deg": 90.0},
             "gps_alt_launch": 10.0,
@@ -392,24 +444,29 @@ def test_state_log_is_ringbuffer():
 def test_dode_pixels_worden_geen_brand():
     # De MLX90640 heeft altijd een paar dode pixels (en een mislukte
     # I2C-read geeft uitschieters). Drie naast elkaar liggende kapotte
-    # cellen mogen nooit als brand met coördinaten doorgaan.
-    frame = sim.make_frame()
-    for x, y in ((10, 10), (11, 10), (10, 11)):
-        frame[y * DEFAULT.width + x] = 1200.0
-    ambient, _, hotspots = thermal.find_hotspots(frame)
-    assert ambient < 25.0, "kapotte cellen mogen de mediaan niet opblazen"
-    assert hotspots == [], "dode pixels horen geen hotspot te zijn"
+    # cellen mogen nooit als brand met coördinaten doorgaan. 565 C is de
+    # waarde die op 30 okt in het echt als "brand" doorkwam; 1200 C is de
+    # klassieke I2C-flard.
+    for waarde in (565.0, 1200.0):
+        frame = sim.make_frame()
+        for x, y in ((10, 10), (11, 10), (10, 11)):
+            frame[y * DEFAULT.width + x] = waarde
+        ambient, _, hotspots = thermal.find_hotspots(frame)
+        assert ambient < 25.0, "kapotte cellen mogen de mediaan niet opblazen"
+        assert hotspots == [], "dode pixels horen geen hotspot te zijn"
 
-    # Ook het canvas krijgt de opgeschoonde waarden: anders schaalt de
-    # kleurenkaart op 1200 C en lijkt de rest van het veld ijs.
-    schoon = thermal.sanitize_frame(frame)
-    assert max(schoon) < 100.0, "uitschieter is vervangen door de mediaan"
-    assert len(schoon) == DEFAULT.width * DEFAULT.height
+        # Ook het canvas krijgt de opgeschoonde waarden: anders schaalt de
+        # kleurenkaart op 1200 C en lijkt de rest van het veld ijs.
+        schoon = thermal.sanitize_frame(frame)
+        assert max(schoon) < 100.0, "uitschieter is vervangen door de mediaan"
+        assert len(schoon) == DEFAULT.width * DEFAULT.height
 
     # Een echte brand naast een dood pixel blijft gewoon gevonden worden.
-    frame[20 * DEFAULT.width + 20] = 85.0
-    frame[19 * DEFAULT.width + 20] = 80.0
-    frame[20 * DEFAULT.width + 21] = 78.0
+    frame = sim.make_frame()
+    frame[0] = 1200.0
+    frame[20 * DEFAULT.width + 20] = 250.0
+    frame[19 * DEFAULT.width + 20] = 180.0
+    frame[20 * DEFAULT.width + 21] = 150.0
     _, _, hotspots = thermal.find_hotspots(frame)
     assert len(hotspots) == 1, "echte brand blijft zichtbaar"
 
@@ -417,7 +474,7 @@ def test_dode_pixels_worden_geen_brand():
 def test_zwakke_fix_geeft_geen_locatie():
     # fix 0/1 = geen betrouwbare 3D-positie. De brand moet wel gemeld
     # worden, maar zonder verzonnen coördinaten.
-    frame = sim.make_frame(vlekken=[(20, 8, 85.0, 2.0)])
+    frame = sim.make_frame(vlekken=[(20, 8, 250.0, 2.0)])
     for fix in (0, 1):
         r = pipeline.detect_event(frame, 52.09, 4.31, 90.0, 25.0, 10.0,
                                   gps_fix=fix)
@@ -433,7 +490,7 @@ def test_zwakke_fix_geeft_geen_locatie():
 def test_ongeldige_positie_geeft_geen_locatie():
     # Zonder fix stuurt de firmware vaak 0.0/0.0: geldige getallen, maar
     # geen positie. Die mag nooit coördinaten bij de Gulf of Guinea geven.
-    frame = sim.make_frame(vlekken=[(20, 8, 85.0, 2.0)])
+    frame = sim.make_frame(vlekken=[(20, 8, 250.0, 2.0)])
     r = pipeline.detect_event(frame, 0.0, 0.0, 90.0, 25.0, 10.0)
     assert r["fires"][0]["hotspot_lat"] is None
     assert r["location_warning"], "operator krijgt uitleg"
@@ -442,7 +499,7 @@ def test_ongeldige_positie_geeft_geen_locatie():
 def test_ontbrekende_hoogte_is_geen_crash():
     # Een packet zonder GPS-hoogte mag de frame niet weggooien: de
     # detectie werkt door, alleen de locatie ontbreekt.
-    frame = sim.make_frame(vlekken=[(20, 8, 85.0, 2.0)])
+    frame = sim.make_frame(vlekken=[(20, 8, 250.0, 2.0)])
     r = pipeline.detect_event(frame, 52.09, 4.31, 90.0, None, None)
     assert r["n_fires"] == 1
     assert r["agl_m"] is None and r["height_warning"] is None
@@ -454,7 +511,7 @@ def test_ingest_tolerant_voor_firmware_verschillen():
     # De firmware is van een teamgenoot en gaat morgen voor het eerst
     # live: kleine naamverschillen en een genest frame mogen geen 400 zijn.
     app = server.App()
-    frame = sim.make_frame(vlekken=[(20, 8, 85.0, 2.5)])
+    frame = sim.make_frame(vlekken=[(20, 8, 250.0, 2.5)])
     genest = [frame[r * 32:(r + 1) * 32] for r in range(24)]
 
     # Geen lanceerhoogte, andere veldnamen, genest frame.
@@ -463,13 +520,14 @@ def test_ingest_tolerant_voor_firmware_verschillen():
         "drone": {"latitude": 52.09, "longitude": 4.31,
                   "alt": 25.0, "yaw": 90.0, "fix": 3},
     })
-    assert uit["n_fires"] == 1, "frame is verwerkt, niet geweigerd"
+    assert len(uit["fires"]) == 1, "frame is verwerkt, niet geweigerd"
+    assert uit["n_fires"] == 0, "nog niet bevestigd na één frame"
     assert uit["fires"][0]["hotspot_lat"] is None, "zonder hoogte geen locatie"
     assert any("lanceerhoogte" in regel for regel in app.state._logs)
 
     # Tweede frame mét hoogte: nu wel coördinaten.
     uit = app.ingest_body({
-        "frame": frame, "gps_alt_launch": 10.0,
+        "frame": _ander(frame), "gps_alt_launch": 10.0,
         "drone": {"lat": 52.09, "lon": 4.31, "alt_msl": 25.0,
                   "heading_deg": 90.0, "fix": 3},
     })
@@ -477,7 +535,7 @@ def test_ingest_tolerant_voor_firmware_verschillen():
 
     # Derde frame zonder hoogte: de eerder ontvangen waarde wordt hergebruikt.
     uit = app.ingest_body({
-        "frame": frame,
+        "frame": _ander(frame, 0.2),
         "drone": {"lat": 52.09, "lon": 4.31, "alt_msl": 25.0,
                   "heading_deg": 90.0, "fix": 3},
     })
@@ -516,7 +574,7 @@ def test_capture_bewaart_ruwe_frames():
     with tempfile.TemporaryDirectory() as map_naam:
         recorder = FlightRecorder(map_naam, capture_frames=True)
         app = server.App(recorder=recorder)
-        app.ingest(sim.make_frame(vlekken=[(20, 8, 85.0, 2.5)]),
+        app.ingest(sim.make_frame(vlekken=[(20, 8, 250.0, 2.5)]),
                    {"lat": 52.09, "lon": 4.31, "alt_msl": 25.0,
                     "heading_deg": 90.0, "fix": 3}, 10.0)
         app.close()
@@ -527,10 +585,184 @@ def test_capture_bewaart_ruwe_frames():
         assert replay.tel_buiten_bereik(frames[0]) == 0
 
 
+def test_esp32_contract_van_de_firmware():
+    # Exact het antwoord van de firmware in "Info from esp PWS (temporary)":
+    # UBX fixType, JSON-null voor dode pixels, en gps_alt_launch die nooit
+    # wordt meegestuurd (sauronSetLaunchMsl wordt niet aangeroepen).
+    frame = sim.make_frame(vlekken=[(20, 8, 250.0, 2.5)])
+    frame[400] = None
+    data = {
+        "thermal_available": True,
+        "frame": frame,
+        "thermal": {"min_c": 12.0, "max_c": 85.0,
+                    "hotspot": {"x": 20, "y": 8}},
+        "drone": {"lat": 52.09, "lon": 4.31, "alt_msl": 25.0,
+                  "heading_deg": 90.0, "fix": 3, "sats": 12, "hdop": 0.9},
+    }
+    gps = {"data_seen": True, "location_valid": True, "lat": 52.09,
+           "lon": 4.31, "alt_msl": 25.0, "heading_deg": 90.0,
+           "speed_mps": 2.0, "fix": 3, "sats": 12, "hdop": 0.9}
+
+    body = esp32.parse_data(data, gps)
+    assert body is not None, "null-cel mag het frame niet weggooien"
+    assert body["drone"]["fix"] == 2, "UBX 3D -> dashboardschaal 3D"
+
+    app = server.App()
+    # Eerste 3D-fix = lanceerpunt: AGL 0, dus nog geen coördinaten. Eén
+    # frame is nog niet genoeg: de track blijft "verdacht".
+    uit = app.ingest_body(body)
+    assert len(uit["fires"]) == 1
+    assert uit["n_fires"] == 0
+    assert uit["fires"][0]["confirmed"] is False
+    assert uit["agl_m"] == 0.0
+    assert any("lanceerhoogte automatisch" in regel
+               for regel in app.state._logs)
+
+    # Tweede frame met dezelfde vlek: nu pas bevestigd.
+    uit = app.ingest_body(dict(body, frame=_ander(body["frame"])))
+    assert uit["n_fires"] == 1
+
+    # Tien meter hoger: dezelfde brand krijgt nu wel coördinaten.
+    hoger = dict(data, drone=dict(data["drone"], alt_msl=35.0),
+                 frame=_ander(data["frame"], 0.2))
+    uit = app.ingest_body(esp32.parse_data(hoger, dict(gps, alt_msl=35.0)))
+    assert uit["agl_m"] == 10.0
+    assert uit["fires"][0]["hotspot_lat"] is not None
+
+    # 2D-fix (UBX fixType 2) heeft geen bruikbare hoogte: geen coördinaten.
+    twee_d = dict(data, drone=dict(data["drone"], fix=2, alt_msl=35.0),
+                  frame=_ander(data["frame"], 0.3))
+    uit = app.ingest_body(
+        esp32.parse_data(twee_d, dict(gps, fix=2, alt_msl=35.0)))
+    assert uit["fires"][0]["hotspot_lat"] is None
+    assert "fix" in uit["location_warning"]
+
+
 def test_autonomie_stub_is_uit():
     advies = autonomy.suggest_action(state.State())
     assert advies["enabled"] is False, "stub meldt zichzelf als uit"
     assert advies["action"] == "hold", "veilige default: hold"
+
+
+def test_bevestiging_filtert_eenmalige_uitschieter():
+    # Eén frame met een hete vlek is nog geen brand: pas als dezelfde plek
+    # in twee opeenvolgende frames heet is, telt hij als bevestigd. Zo
+    # verdwijnen losse sensorflarden uit het waarschuwingsbeeld.
+    tracker = FireTracker()
+    tracker.update([_brand()], now=0.0)
+    _, events = tracker.update([], now=1.0)
+    assert events == []
+    uit, events = tracker.update([], now=3.0)
+    assert [e["type"] for e in events] == ["lost"]
+    assert uit[0]["confirmed"] is False
+
+
+def test_onwaarschijnlijke_omgeving_geeft_geen_brand():
+    # Log 30 okt: de sensor was niet op temperatuur (mediaan 486 C) en de
+    # laptop meldde 137 branden in één vlucht. Zo'n frame is onbruikbaar:
+    # waarschuwen, geen alarmering, en de hotspots blijven als diagnose.
+    frame = [400.0] * 768
+    frame[100] = 560.0
+    r = pipeline.detect_event(frame, 52.09, 4.31, 90.0, 25.0, 10.0)
+    assert r["sensor_warning"], "operator krijgt uitleg over de sensor"
+    assert r["n_fires"] == 0, "geen branden uit een onbruikbaar frame"
+
+    # Ook een vlek van brandformaat in een onbruikbaar frame (mediaan 80 C:
+    # sensor niet op temperatuur) wordt niet als brand gemeld. De vlek
+    # blijft wel als hotspot zichtbaar voor de diagnose.
+    warm = [80.0] * 768
+    for x, y in ((10, 10), (11, 10), (10, 11), (11, 11)):
+        warm[y * DEFAULT.width + x] = 150.0
+    r = pipeline.detect_event(warm, 52.09, 4.31, 90.0, 25.0, 10.0)
+    assert r["sensor_warning"]
+    assert r["n_fires"] == 0
+    assert r["hotspots"], "de vlek blijft zichtbaar als diagnose"
+
+
+def test_verdachte_track_telt_niet_als_brand():
+    app = server.App()
+    frame = sim.make_frame(vlekken=[(20, 8, 250.0, 2.5)])
+    drone = {"lat": 52.09, "lon": 4.31, "alt_msl": 25.0,
+             "heading_deg": 90.0, "fix": 3}
+    uit = app.ingest(frame, drone, 10.0)
+    assert uit["fires"][0]["confirmed"] is False
+    assert uit["n_fires"] == 0
+    assert uit["n_suspects"] == 1
+    assert app.snapshot()["thermal"]["n_fires"] == 0
+    app.close()
+
+
+def test_frame_sequentie_loopt_op():
+    # De UI tekent alleen nieuwe frames en toont de leeftijd van het beeld.
+    app = server.App()
+    frame = sim.make_frame(vlekken=[(20, 8, 250.0, 2.5)])
+    drone = {"lat": 52.09, "lon": 4.31, "alt_msl": 25.0,
+             "heading_deg": 90.0, "fix": 3}
+    app.ingest(frame, drone, 10.0)
+    app.ingest(frame, drone, 10.0)
+    payload = app.frame_payload()
+    assert payload["seq"] == 2
+    assert payload["t"] is not None
+    assert app.snapshot()["frame"]["seq"] == 2
+    assert len(payload["cells"]) == 768
+    app.close()
+
+
+def test_identiek_frame_telt_niet_als_meting():
+    # Een bevroren sensorread of een dubbel afgeleverd antwoord stuurt exact
+    # dezelfde 768 waarden. Dat is geen tweede meting: een brand mag daar
+    # niet door bevestigd worden.
+    app = server.App()
+    frame = sim.make_frame(vlekken=[(20, 8, 250.0, 2.5)])
+    drone = {"lat": 52.09, "lon": 4.31, "alt_msl": 25.0,
+             "heading_deg": 90.0, "fix": 3}
+    eerste = app.ingest(frame, drone, 10.0)
+    tweede = app.ingest(list(frame), drone, 10.0)
+    assert eerste["duplicate"] is False
+    assert tweede["duplicate"] is True
+    assert tweede["n_fires"] == 0, "identiek frame bevestigt niets"
+    assert tweede["n_suspects"] == 1
+    assert any("identiek frame" in regel for regel in app.state._logs)
+    app.close()
+
+
+def test_oude_positie_geeft_geen_coordinaten():
+    # /api/gps valt weg terwijl het warmtebeeld doorkomt: de laatst bekende
+    # positie mag geen coördinaten meer opleveren (die kloppen niet meer).
+    frame = sim.make_frame(vlekken=[(20, 8, 250.0, 2.0)])
+    r = pipeline.detect_event(frame, 52.09, 4.31, 90.0, 25.0, 10.0,
+                              gps_fix=3, position_age_s=12.0)
+    assert r["n_fires"] == 1, "de brand zelf wordt nog steeds gemeld"
+    assert r["fires"][0]["hotspot_lat"] is None
+    assert "oud" in r["location_warning"]
+
+    # Verse positie: wel coördinaten.
+    r = pipeline.detect_event(frame, 52.09, 4.31, 90.0, 25.0, 10.0,
+                              gps_fix=3, position_age_s=0.4)
+    assert r["fires"][0]["hotspot_lat"] is not None
+
+
+def test_verse_drone_wint_van_oude_gps():
+    # /api/data levert per frame een verse positie, /api/gps maar 1 Hz. De
+    # verse moet winnen, anders rekent het dashboard met een oude positie.
+    frame = sim.make_frame(vlekken=[(20, 8, 250.0, 2.5)])
+    data = {"frame": frame,
+            "drone": {"lat": 52.10, "lon": 4.32, "alt_msl": 30.0,
+                      "heading_deg": 10.0, "fix": 3}}
+    gps = {"lat": 52.09, "lon": 4.31, "alt_msl": 25.0}
+    body = esp32.parse_data(data, gps)
+    assert body["drone"]["lat"] == 52.10
+    assert body["drone"]["alt_msl"] == 30.0
+    # Zonder per-frame-drone vult /api/gps de positie.
+    body = esp32.parse_data({"frame": frame}, gps)
+    assert body["drone"]["lat"] == 52.09
+
+
+def test_afgekapt_frame_is_geen_meting():
+    # Een half antwoord mag geen ingest of een halve detectie worden: de
+    # poll-lus vraagt het frame dan gewoon opnieuw.
+    assert esp32.parse_data({"frame": [22.0] * 700}) is None
+    assert esp32.parse_data({"frame": [22.0] * 768}) is not None
 
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

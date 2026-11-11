@@ -23,6 +23,7 @@ lokaal houden, start dan met --host 127.0.0.1.
 """
 
 import json
+import logging
 import socket
 import threading
 import time
@@ -30,7 +31,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote
 
-from . import autonomy, pipeline, thermal
+from . import autonomy, gps_nmea, pipeline, thermal
 from .config import DEFAULT
 from .state import State
 from .tracking import FireTracker
@@ -41,6 +42,10 @@ with open(WEB_DIR / "index.html", "rb") as _f:
 
 FIX_LABELS = {0: "geen", 1: "2D", 2: "3D", 3: "3D rtk"}
 
+# Draadje naar het tekstlogbestand (sauron.applog zet de handlers). Alles
+# wat de operator in de UI ziet komt zo ook op schijf terecht.
+_LOG = logging.getLogger("sauron")
+
 
 def _clock(ts):
     return time.strftime("%H:%M:%S", time.localtime(ts))
@@ -50,6 +55,14 @@ def _fix_label(fix):
     if fix is None:
         return "onbekend"
     return FIX_LABELS.get(fix, str(fix))
+
+
+def _fix_nummer(fix):
+    """Fix als getal (strings uit JSON mogen ook); -1 als het geen getal is."""
+    try:
+        return int(float(fix))
+    except (TypeError, ValueError):
+        return -1
 
 
 def _first(obj, *namen):
@@ -83,6 +96,9 @@ def _event_text(event):
             label, brand["max_temp"], _clock(brand["last_seen"]))
     if event["type"] == "reacquired":
         return "brand %s weer in beeld" % label
+    if event["type"] == "confirmed":
+        return "brand %s bevestigd na %d metingen" % (
+            label, brand.get("observations", 0))
     if event["type"] == "archived":
         return "brand %s gearchiveerd" % label
     return "brand %s: %s" % (label, event["type"])
@@ -103,6 +119,9 @@ class App:
         # opnieuw te sturen (scheelt een 400 als hij hem maar één keer
         # meestuurt). Per vlucht weer leeg.
         self._launch_alt = None
+        self._launch_alt_vast = None  # via --launch-alt; blijft over vluchten
+        self._frame_seq = 0           # loopt op bij elke ingest (zie frame_seq)
+        self._herhalingen = 0      # frames die identiek waren aan de vorige
         self._warned = set()       # waarschuwingen die maar één keer loggen
         self._mislukt = 0          # aantal afgewezen POSTs
         self._laatste_melding = 0.0
@@ -111,6 +130,9 @@ class App:
 
     # -- vlucht -----------------------------------------------------------
     def _on_log(self, bericht, tijd):
+        # Ook naar het tekstlogbestand: de UI-logregel en het bestand horen
+        # hetzelfde verhaal te vertellen.
+        _LOG.info("%s", bericht)
         if self.recorder is not None:
             self.recorder.record({"type": "log", "message": bericht}, t=tijd)
 
@@ -128,13 +150,25 @@ class App:
         """Reset state + tracker en open (indien aanwezig) een nieuw bestand."""
         self.tracker.reset()
         self.state.reset()
-        self._launch_alt = None
+        self._frame_seq = 0
+        self._herhalingen = 0
+        self._launch_alt = self._launch_alt_vast
         self._warned = set()
         self._mislukt = 0
         self._laatste_melding = 0.0
         if self.recorder is not None:
             self.state.flight = self.recorder.start()
         self.state.add_log("vlucht gestart")
+
+    def set_launch_alt(self, alt_msl):
+        """Lanceerhoogte (MSL) alvast zetten.
+
+        De firmware stuurt `gps_alt_launch` alleen mee als hij hem kent;
+        met deze waarde komen er ook coördinaten bij een brand.
+        """
+        with self._lock:
+            self._launch_alt_vast = alt_msl
+            self._launch_alt = alt_msl
 
     def new_flight(self):
         """Sluit de huidige vlucht af, reset alles en start een nieuwe."""
@@ -199,8 +233,9 @@ class App:
             self.state.add_log(
                 "ingest afgewezen (%d totaal): %s" % (self._mislukt, reden)
             )
+        _LOG.warning("ingest afgewezen: %s", reden)
 
-    def ingest_body(self, body):
+    def ingest_body(self, body, link=None, meta=None):
         """Lees één ESP32-pakket tolerant uit en verwerk het.
 
         De firmware is van een teamgenoot en gaat morgen voor het eerst
@@ -230,21 +265,54 @@ class App:
             "fix": ruw.get("fix"),
             "sats": ruw.get("sats"),
             "hdop": ruw.get("hdop"),
+            # Leeftijd van de positie (s), gevuld door de poll-lus als de
+            # positie uit de 1 Hz-/api/gps komt en niet per frame vers is.
+            "age_s": ruw.get("age_s"),
         }
 
+        # Ruwe NMEA is de eenvoudigste route voor de firmware: die geeft de
+        # zinnen van de GPS gewoon door. Geparseerde velden hierboven
+        # winnen; NMEA vult alleen aan wat ontbreekt. Zonder dit stuk werd
+        # het veld `nmea` stil genegeerd en kwam er nooit een positie
+        # binnen, terwijl de firmware-docs hem juist aanraden.
+        nmea = _first(body, "nmea", "nmea_lines")
+        if isinstance(nmea, str) and nmea.strip():
+            for sleutel, waarde in gps_nmea.parse_nmea_block(nmea).items():
+                if drone.get(sleutel) is None:
+                    drone[sleutel] = waarde
+
         launch = _first(body, "gps_alt_launch", "alt_launch", "launch_alt_msl")
-        if launch is None:
-            # Niet elke firmware stuurt dit bij elk frame mee. Onthoud de
-            # waarde van eerder; is die er nog niet, dan melden we de brand
-            # zonder coördinaten in plaats van de hele frame te weigeren.
-            launch = self._launch_alt
-            if launch is None:
-                self._note_once(
-                    "launch",
-                    "geen lanceerhoogte ontvangen: branden zonder coördinaten",
-                )
-        else:
+        if launch is not None:
             self._launch_alt = launch
+
+        if self._launch_alt is None:
+            # De firmware roept sauronSetLaunchMsl() nooit aan, dus
+            # gps_alt_launch komt niet mee. De eerste bruikbare GPS-hoogte
+            # is dan het lanceerpunt: AGL en coördinaten werken meteen.
+            # Met --launch-alt (of een herstart op de grond) is het exact.
+            hoogte = drone["alt_msl"]
+            if hoogte is not None and _fix_nummer(drone["fix"]) >= 2:
+                try:
+                    hoogte = float(hoogte)
+                except (TypeError, ValueError):
+                    hoogte = None
+                if hoogte is not None:
+                    self._launch_alt = hoogte
+                    self._note_once(
+                        "launch-auto",
+                        "lanceerhoogte automatisch op %.1f m MSL gezet "
+                        "(eerste 3D-fix; herstart op de grond of gebruik "
+                        "--launch-alt voor een exacte AGL)" % hoogte,
+                    )
+
+        launch = self._launch_alt
+        if launch is None:
+            # Is er nog steeds niets, dan melden we de brand zonder
+            # coördinaten in plaats van de hele frame te weigeren.
+            self._note_once(
+                "launch",
+                "geen lanceerhoogte ontvangen: branden zonder coördinaten",
+            )
 
         if drone["heading_deg"] is None:
             self._note_once(
@@ -255,9 +323,9 @@ class App:
         if drone["alt_msl"] is None:
             self._note_once("alt", "GPS-hoogte ontbreekt: geen AGL, geen locatie")
 
-        return self.ingest(frame, drone, launch)
+        return self.ingest(frame, drone, launch, link=link, meta=meta)
 
-    def ingest(self, frame, drone, gps_alt_launch):
+    def ingest(self, frame, drone, gps_alt_launch, link=None, meta=None):
         """Verwerk één meetmoment en werk de staat bij. Retourneert resultaat.
 
         'drone' = {"lat","lon","alt_msl","heading_deg", optioneel
@@ -269,15 +337,41 @@ class App:
         # rest van het veld ijs. sanitize_frame valideert ook (400 bij
         # NaN/tekst/verkeerde lengte).
         frame = thermal.sanitize_frame(frame, self.cfg)
+        positie_leeftijd = drone.get("age_s")
         resultaat = pipeline.detect_event(
             frame, drone["lat"], drone["lon"], drone["heading_deg"],
             drone["alt_msl"], gps_alt_launch,
-            gps_fix=drone.get("fix"), cfg=self.cfg,
+            gps_fix=drone.get("fix"), position_age_s=positie_leeftijd,
+            cfg=self.cfg,
         )
 
         with self._lock:
-            tracked, events = self.tracker.update(resultaat["fires"], now)
-            active = sum(1 for brand in tracked if brand["active"])
+            # Een identiek frame is geen nieuwe meting: een bevroren
+            # sensorread of een dubbel afgeleverd antwoord mag een brand
+            # niet bevestigen. Voor de weergave telt het frame wel mee.
+            herhaling = (self.state.last_frame is not None
+                         and frame == self.state.last_frame)
+            if herhaling:
+                self._herhalingen += 1
+                tracked = self.tracker.snapshot(now)
+                events = []
+                if (self._herhalingen in (1, 20)
+                        or self._herhalingen % 100 == 0):
+                    self.state.add_log(
+                        "identiek frame (%d×): telt niet als nieuwe meting"
+                        % self._herhalingen)
+            else:
+                self._herhalingen = 0
+                tracked, events = self.tracker.update(resultaat["fires"], now)
+            # Alleen bevestigde tracks zijn een brandmelding; een track die
+            # nog maar één frame gezien is, blijft "verdacht" in de lijst.
+            bevestigd = [b for b in tracked if b["active"]
+                         and b.get("confirmed", True)]
+            verdacht = [b for b in tracked if b["active"]
+                        and not b.get("confirmed", True)]
+            active = len(bevestigd)
+            self._frame_seq += 1
+            seq = self._frame_seq
 
             st = self.state
             vorige_update = st.last_update
@@ -294,7 +388,8 @@ class App:
             # Hoogte en ontbrekende locatie zijn aparte meldingen; toon
             # ze allebei in plaats van de één door de ander te verbergen.
             waarschuwingen = [w for w in (resultaat["height_warning"],
-                                          resultaat.get("location_warning")) if w]
+                                          resultaat.get("location_warning"),
+                                          resultaat.get("sensor_warning")) if w]
             waarschuwing = " · ".join(waarschuwingen) or None
             if waarschuwing != st.warning:
                 if waarschuwing:
@@ -310,12 +405,17 @@ class App:
             st.fc_fix = nieuwe_fix
             st.fc_sats = drone.get("sats")
             st.fc_hdop = drone.get("hdop")
+            st.gps_age_s = positie_leeftijd
             st.ambient = resultaat["ambient"]
             st.threshold = resultaat["threshold"]
             st.hotspots = resultaat["hotspots"]
             st.fires = tracked
             st.last_frame = list(frame)
             st.last_update = now
+            st.frame_seq = seq
+            st.frame_time = now
+            if link is not None:
+                st.link = dict(link)
             st.warning = waarschuwing
 
             self._log_events(events, now)
@@ -327,6 +427,9 @@ class App:
             if self.recorder is not None:
                 regel = {
                     "type": "ingest",
+                    "seq": seq,
+                    "frame_time": now,
+                    "duplicate": herhaling,
                     "gps_alt_launch": gps_alt_launch,
                     "drone": {
                         "lat": drone["lat"], "lon": drone["lon"],
@@ -335,16 +438,21 @@ class App:
                         "fix": nieuwe_fix,
                         "sats": drone.get("sats"),
                         "hdop": drone.get("hdop"),
+                        "age_s": positie_leeftijd,
                     },
+                    "link": link,
+                    "esp32": meta,
                     "thermal": {
                         "ambient": resultaat["ambient"],
                         "threshold": resultaat["threshold"],
                         "n_hotspots": len(resultaat["hotspots"]),
                         "n_fires": active,
+                        "n_suspects": len(verdacht),
                     },
                     "agl_m": resultaat["agl_m"],
                     "height_warning": resultaat["height_warning"],
                     "location_warning": resultaat.get("location_warning"),
+                    "sensor_warning": resultaat.get("sensor_warning"),
                     "warning": waarschuwing,
                     "hotspots": resultaat["hotspots"],
                     "fires": tracked,
@@ -355,7 +463,9 @@ class App:
                     regel["cells"] = [round(v, 1) for v in frame]
                 self.recorder.record(regel, t=now)
 
-        return {**resultaat, "fires": tracked, "n_fires": active}
+        return {**resultaat, "fires": tracked, "n_fires": active,
+                "n_suspects": len(verdacht), "seq": seq,
+                "duplicate": herhaling}
 
     def snapshot(self):
         """Thread-veilige kopie voor GET /api/state.
@@ -372,11 +482,14 @@ class App:
         """Thread-veilige kopie voor GET /api/frame (afgerond = kleiner)."""
         with self._lock:
             frame = self.state.last_frame
+            seq = self.state.frame_seq
+            tijd = self.state.frame_time
         if frame is None:
             return {"width": self.cfg.width, "height": self.cfg.height,
-                    "cells": None}
+                    "cells": None, "seq": seq, "t": tijd}
         return {"width": self.cfg.width, "height": self.cfg.height,
-                "cells": [round(v, 1) for v in frame]}
+                "cells": [round(v, 1) for v in frame],
+                "seq": seq, "t": tijd}
 
     def list_flights(self):
         if self.recorder is None:
@@ -447,7 +560,10 @@ def make_handler(app):
                     app.note_ingest_rejected(str(fout))
                     self.send_error(400, "ongeldige ingest-body: %s" % fout)
                     return
-                self._send_json({"ok": True, "n_fires": resultaat["n_fires"],
+                self._send_json({"ok": True,
+                                 "n_fires": resultaat["n_fires"],
+                                 "n_suspects": resultaat.get("n_suspects", 0),
+                                 "seq": resultaat.get("seq"),
                                  "fires": resultaat["fires"]})
             elif self.path == "/api/new-flight":
                 try:
@@ -486,9 +602,11 @@ def run(app=None, host="0.0.0.0", port=8000):
     server = ThreadingHTTPServer((host, port), make_handler(app))
     print("Sauron dashboard op http://localhost:%d  (Ctrl+C om te stoppen)"
           % port)
+    _LOG.info("dashboard luistert op %s:%d", host, port)
     ip = lan_ip() if host in ("0.0.0.0", "::") else None
     if ip:
         print("Vanaf ESP32/andere apparaten: http://%s:%d" % (ip, port))
+        _LOG.info("LAN-adres voor de ESP32: http://%s:%d", ip, port)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

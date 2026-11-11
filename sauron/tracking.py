@@ -14,6 +14,11 @@ houdt daarom een track per brand bij:
   track en dus hetzelfde ID; er komt geen duplicaat bij.
 - **Archiveren** verwijdert de track pas na `track_archive_after_s` uit het
   live-overzicht. De volledige historie staat in het vluchtbestand.
+- **Bevestigen**: een nieuwe track is eerst "verdacht" en wordt pas
+  "bevestigd" na `confirm_observations` metingen. Eén frame met een hete
+  vlek is nog geen brand; zo verdwijnen losse sensorflarden uit het
+  waarschuwingsbeeld zonder dat een echte brand traag wordt gemeld
+  (met 4 Hz is de vertraging een halve seconde).
 
 Bewuste beperking (YAGNI): splitst één brand in twee losse blobs, dan
 worden dat twee tracks. Samenvoegen zou twee echte branden naast elkaar
@@ -36,6 +41,7 @@ class Track:
     last_seen: float
     observations: int
     lost: bool
+    confirmed: bool = False
     det: dict = field(default_factory=dict)
 
     def to_dict(self, now, lost_after_s):
@@ -46,6 +52,9 @@ class Track:
             "id": "B%d" % self.id,
             "status": "active" if active else "lost",
             "active": active,
+            # confirmed = in genoeg opeenvolgende frames gezien; pas dan
+            # telt de track als brandmelding (anders: "verdacht").
+            "confirmed": self.confirmed,
             "first_seen": self.first_seen,
             "last_seen": self.last_seen,
             "observations": self.observations,
@@ -135,6 +144,11 @@ class FireTracker:
             if was_lost:
                 events.append({"type": "reacquired",
                                "fire": track.to_dict(now, self.cfg.track_lost_after_s)})
+            if (not track.confirmed
+                    and track.observations >= self.cfg.confirm_observations):
+                track.confirmed = True
+                events.append({"type": "confirmed",
+                               "fire": track.to_dict(now, self.cfg.track_lost_after_s)})
 
         # Nieuwe detecties zonder track worden een nieuwe brand.
         for det_index, det in enumerate(fires):
@@ -146,6 +160,9 @@ class FireTracker:
                 last_seen=now,
                 observations=1,
                 lost=False,
+                # Met confirm_observations <= 1 (of bij een herstart van een
+                # al bevestigde track) is de eerste meting genoeg.
+                confirmed=self.cfg.confirm_observations <= 1,
                 det=dict(det),
             )
             self._tracks[track.id] = track

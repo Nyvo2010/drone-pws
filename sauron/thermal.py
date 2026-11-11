@@ -14,6 +14,10 @@ Stappen:
 5. find_hotspots: filter blobs kleiner dan min_area_pixels (ruis) en
    bereken per blob: heetste pixel, centroid en oppervlakte.
 
+Daarnaast `assess_frame`: is dit frame überhaupt een geloofwaardig beeld
+van de grond? Een sensor die net aan staat, of een mislukte read, geeft
+een mediaan van 0 of 480 C. Zulke frames mogen nooit branden opleveren.
+
 Alleen stdlib, geen numpy: werkt overal en offline.
 """
 
@@ -72,7 +76,8 @@ def sanitize_values(values, cfg=DEFAULT):
     goed = sorted(v for v in values if lo <= v <= hi)
     if not goed or len(goed) == len(values):
         # Alles in orde (geen werk) of alles onzin (dan valt er niets te
-        # vervangen); in het laatste geval blijft het gedrag zoals het was.
+        # vervangen); in het laatste geval blijft het gedrag zoals het was
+        # en vangt assess_frame het frame als geheel af.
         return list(values)
     vervanger = goed[len(goed) // 2]
     return [v if lo <= v <= hi else vervanger for v in values]
@@ -95,6 +100,38 @@ def estimate_ambient(matrix):
     if len(flat) % 2 == 1:
         return float(flat[midden])
     return float((flat[midden - 1] + flat[midden]) / 2.0)
+
+
+def assess_frame(frame, cfg=DEFAULT):
+    """Is dit frame een geloofwaardig beeld van de grond?
+
+    Retourneert (ambient, problemen) waarbij 'problemen' een lijst is met
+    operator-taal. Lege lijst = frame is bruikbaar.
+
+    Twee dingen die in het veld echt misgingen:
+    - de sensor was net aangezet en gaf een mediaan van 480 C; de laptop
+      meldde 137 branden in één vlucht;
+    - een deel van de pixels zat op de sensorgrens (verzadigd), waardoor
+      de mediaan en de drempel verschoven.
+    """
+    ruw = validated_values(frame)
+    lo, hi = cfg.valid_temp_min_c, cfg.valid_temp_max_c
+    problemen = []
+
+    verzadigd = sum(1 for v in ruw if v >= hi)
+    fractie = verzadigd / float(len(ruw))
+    if fractie > cfg.max_saturated_fraction:
+        problemen.append(
+            "%.0f%% van de pixels zit op de sensorgrens (>= %.0f C): "
+            "beeld verzadigd" % (fractie * 100.0, hi))
+
+    matrix = to_matrix(sanitize_values(ruw, cfg))
+    ambient = estimate_ambient(matrix)
+    if ambient < cfg.ambient_min_c or ambient > cfg.ambient_max_c:
+        problemen.append(
+            "omgeving %.1f C is onwaarschijnlijk (-15..70 C): sensor niet "
+            "op temperatuur of frame kapot" % ambient)
+    return ambient, problemen
 
 
 def threshold_mask(matrix, threshold):

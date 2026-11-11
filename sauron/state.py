@@ -45,6 +45,18 @@ class State:
     # Wandkloktijd (epoch) van de laatste ingest; de UI toont hiermee of de
     # feed nog leeft in plaats van oude waarden als "live" te presenteren.
     last_update: float | None = None
+    # Volgnummer van het laatste frame (loopt op bij elke ingest) plus de
+    # tijd van dat frame. De UI tekent alleen écht nieuwe frames en toont
+    # hoe oud het beeld is; zo blijft het scherm synchroon met de ESP32.
+    frame_seq: int = 0
+    frame_time: float | None = None
+    # Linkkwaliteit van de laatste poll: latentie, poll-interval, missers,
+    # percentage geslaagde polls en de leeftijd van de positie.
+    link: dict | None = None
+    # Leeftijd (s) van de positie die we gebruiken. Alleen gevuld als de
+    # positie uit de 1 Hz-/api/gps komt; een oude positie levert geen
+    # coördinaten op, maar blijft zichtbaar met deze leeftijd.
+    gps_age_s: float | None = None
     # Actieve waarschuwing van de laatste meting (hoogte of ontbrekende
     # locatie), zodat de operator hem ziet en niet alleen in het logboek.
     warning: str | None = None
@@ -103,6 +115,10 @@ class State:
         self.fires = []
         self.last_frame = None
         self.last_update = None
+        self.frame_seq = 0
+        self.frame_time = None
+        self.link = None
+        self.gps_age_s = None
         self.warning = None
         self.flight = None
         self.battery = None
@@ -124,16 +140,26 @@ class State:
                 "fc_fix": self.fc_fix,
                 "fc_sats": self.fc_sats,
                 "fc_hdop": self.fc_hdop,
+                "gps_age_s": self.gps_age_s,
             },
             "thermal": {
                 "ambient": self.ambient,
                 "threshold": self.threshold,
                 "n_hotspots": len(self.hotspots),
-                # Alleen branden die nog binnen de grace-periode gezien zijn;
-                # uit-beeld-tracks blijven in de lijst voor herdetectie.
-                "n_fires": sum(1 for f in self.fires if f.get("active", True)),
+                # Alleen bevestigde, nog zichtbare branden tellen als
+                # brandmelding. Uit-beeld-tracks blijven in de lijst voor
+                # herdetectie; onbevestigde tracks zijn "verdacht".
+                "n_fires": sum(1 for f in self.fires
+                               if f.get("active", True)
+                               and f.get("confirmed", True)),
+                "n_suspects": sum(1 for f in self.fires
+                                  if f.get("active", True)
+                                  and not f.get("confirmed", True)),
             },
             "fires": self.fires,
+            # Versheid van het beeld zelf (niet alleen van de ingest).
+            "frame": {"seq": self.frame_seq, "t": self.frame_time},
+            "link": self.link,
             "battery": self.battery,  # None -> UI toont placeholder
             "mode": self.mode,
             "rgb_url": self.rgb_url,

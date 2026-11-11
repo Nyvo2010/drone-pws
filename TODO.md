@@ -20,12 +20,32 @@
       brandkaarten met status, laatste meting en coördinaten kopiëren
 - [x] Server luistert op 0.0.0.0 zodat de ESP32 de laptop over WiFi kan bereiken
 - [x] AGL <= 0: brand melden zonder coördinaten (geen crash/400) + waarschuwing
-- [ ] Veldkalibratie: drempels (threshold 12 C, min-area 3 px) + FOV-check 110x75
-      (na de vlucht: `python3 dashboard.py --capture` + `python3 -m sauron.replay <bestand>`)
+- [ ] Veldkalibratie: drempels (brand 90 C / +45 C, verdacht 60 C / +30 C,
+      min-area 3 px) + FOV-check 110x75 (na de vlucht:
+      `python3 dashboard.py --capture` + `python3 -m sauron.replay <bestand>`)
 - [x] Dode pixels / I2C-uitschieters filteren (-20..600 C -> mediaan), ook voor het canvas
 - [x] Locatie alleen bij fix >= 2, geldige positie en bekende hoogte (anders brand zonder coördinaten)
 - [x] Ingest tolerant voor het firmware-contract + afgewezen POSTs in het logboek
 - [x] Ruwe frames opnemen (`--capture`) + offline replay om drempels te hertunen
+- [x] Realistische drempels: brand = 90 C EN +45 C boven omgeving; steen/asfalt
+      (55-70 C) valt af als "verdacht" i.p.v. vals alarm
+- [x] Frame-plausibiliteit: mediaan -15..70 C en max 15% verzadigd, anders
+      sensorwaarschuwing zonder branden (log 30 okt: mediaan 486 C, 137 "branden")
+- [x] Tijdsconsistentie: track pas "bevestigd" na 2 metingen; eenmalige
+      uitschieters blijven "verdacht"
+- [x] Lokale logging: `logs/dashboard-YYYYMMDD.log` (alle regels, camera, link,
+      fouten, excepthooks) + JSONL met `seq`, `frame_time`, `link` en `esp32`-meta
+- [x] Keep-alive naar de ESP32, camera-opzet (480x320/kwaliteit 10), backoff en
+      diagnose bij wegvallen
+- [x] Dashboard tekent alleen nieuwe frames (seq) en toont de leeftijd van het beeld
+- [x] `nmea`-veld in /api/ingest wordt nu echt geparseerd (was stil genegeerd)
+- [x] Zwakke link: aparte lees-timeout, afgekapt frame = meteen opnieuw vragen,
+      oude positie (> 3 s) geeft geen coördinaten, verse /api/data-positie wint
+      van de 1 Hz-cache
+- [x] Identiek frame telt niet als nieuwe meting (bevroren sensor bevestigt
+      geen brand); `duplicate` staat in het vluchtbestand
+- [x] Diagnose bij uitval op een eigen thread (blokkeert het pollen niet) en
+      linkkwaliteit (`ok_pct`) zichtbaar in de telemetrie
 - [ ] Seriële poort bepalen zodra FC is aangesloten (`gps_nmea.list_candidate_ports`)
 - [ ] ESP32 JSON-formaat + GPS-forwarding afstemmen met teamgenoot (768 floats, rij-majeur, FC via UART4)
 

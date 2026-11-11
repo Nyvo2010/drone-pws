@@ -12,6 +12,25 @@ Vastgelegde hardware-aannames (van het team):
   ("110" uit de teamafstemming; aanpasbaar als ander type blijkt.)
 - GPS levert NMEA-zinnen; seriële poort is nog onbekend -> zie gps_nmea.
 - Vlieghoogte boven lanceerpunt: 5 tot 30 meter, bijna geen wind.
+
+Waarom deze drempels (dit is de kern van "geen brand op een steen"):
+
+- De MLX90640 meet een schijnbare temperatuur per pixel. Op 15 m AGL is
+  een pixel ongeveer 1,3 x 1,0 m grond. Een bosbrand van 1 m2 vult zo'n
+  pixel bijna helemaal en leest dan honderden graden.
+- Zonverwarmde stenen, asfalt en daken halen in de praktijk 55-70 C,
+  ook als de lucht maar 25 C is. Een regel als "omgeving + 10 C" maakt
+  daar dus een brand van. Daarom telt absolute hitte (>= 90 C) EN een
+  grote sprong boven de omgeving (>= 45 C). Wat daar tussenin zit
+  (60-90 C) is een "verdacht" warm voorwerp, geen brand.
+- De sensor is gespecificeerd tot 300 C. Metingen boven 350 C zijn
+  leesfouten (dode pixel, I2C-flard) en worden door de mediaan vervangen.
+- Een frame waarvan de mediaan buiten -15..70 C ligt, is geen beeld van
+  de grond: de sensor is dan niet op temperatuur (net aangezet) of het
+  frame is kapot. Zo'n frame geeft een waarschuwing en geen branden.
+- Eén frame is nog geen brand: dezelfde plek moet in twee opeenvolgende
+  frames heet zijn voordat de melding "bevestigd" is. Losse flarden
+  verdwijnen daardoor uit het waarschuwingsbeeld.
 """
 
 from dataclasses import dataclass
@@ -32,27 +51,45 @@ class Config:
 
     # -- Validatie van meetwaarden --------------------------------------
     # Dode pixels en I2C-flarden van de MLX90640 geven waarden als -273 of
-    # 1000+ C. Buiten dit bereik is het geen temperatuur maar een sensorfout:
-    # zo'n cel wordt door de mediaan van het frame vervangen voordat we
-    # blobs zoeken. Zonder deze klep wordt één dood pixel een "brand".
+    # 1000+ C, en een beschadigde read kan ook 400-600 C geven. Buiten dit
+    # bereik is het geen temperatuur maar een sensorfout: zo'n cel wordt
+    # door de mediaan van het frame vervangen voordat we blobs zoeken.
+    # 350 C = bovengrens van de sensor (300 C) plus marge.
     valid_temp_min_c: float = -20.0
-    valid_temp_max_c: float = 600.0
+    valid_temp_max_c: float = 350.0
+
+    # -- Plausibiliteit van het hele frame ------------------------------
+    # Mediaan buiten deze band = geen geloofwaardig beeld van de grond.
+    # (Log 30 okt: mediaan 486 C en 137 "branden" uit één vlucht.)
+    ambient_min_c: float = -15.0
+    ambient_max_c: float = 70.0
+    # Meer dan dit deel van de pixels op de sensorgrens = verzadigd beeld
+    # (sensor kijkt in de zon, of de read is mislukt).
+    max_saturated_fraction: float = 0.15
 
     # -- Laag 1: heat point identificatie ------------------------------
-    # Drempel = omgevingstemperatuur + deze marge. Hoger = minder vals
-    # alarm (zon/warme daken), lager = vroegere detectie. Kalibreren!
+    # Drempel = omgevingstemperatuur + deze marge. Bepaalt welke pixels
+    # überhaupt als "warm punt" meetellen; de classificatie hieronder
+    # beslist of het ook een brand is.
     threshold_above_ambient: float = 12.0
-    # Kleinste blob die we serieus nemen, in pixels. Bij 10 m hoogte is
-    # 1 pixel ca. 0,9 m breed, dus 3 pixels is grofweg een beginnend
-    # brandje van enkele m2. Kleiner = ruis (dode pixels, reflecties).
+    # Kleinste blob die we serieus nemen, in pixels. Eén pixel is ruis
+    # (dode pixel, reflectie); 3 aaneengesloten pixels is een echt voorwerp.
     min_area_pixels: int = 3
 
-    # -- Laag 2: classificatie -----------------------------------------
-    # Minimale temperatuurstijging boven omgeving voor "mogelijke brand".
-    fire_min_delta: float = 10.0
-    # Absolute ondergrens: kouder dan dit is nooit een bosbrand,
-    # ook niet bij een koude dag (voorkomt winter-vals-alarm).
-    fire_min_abs: float = 40.0
+    # -- Laag 2: classificatie (twee standen) --------------------------
+    # "verdacht": heter dan alles wat de zon op de grond kan maken.
+    # Operatorkant: interessant om te bekijken, geen brandmelding.
+    suspect_min_abs_c: float = 60.0
+    suspect_min_delta_c: float = 30.0
+    # "brand": absolute hitte EN een sprong die alleen een vuur maakt.
+    fire_min_abs_c: float = 90.0
+    fire_min_delta_c: float = 45.0
+
+    # -- Tijdsconsistentie ---------------------------------------------
+    # Aantal metingen (frames) voordat een brand "bevestigd" is. Met 4 Hz
+    # means dit een halve seconde: snel genoeg voor het veld, langzaam
+    # genoeg om een losse sensorflard geen melding te laten worden.
+    confirm_observations: int = 2
 
     # -- Brand-tracking over frames -------------------------------------
     # Zelfde brand binnen deze straal (wereldcoördinaten) = zelfde track.
@@ -73,6 +110,24 @@ class Config:
     # Omrekening meters -> graden (platte-aarde benadering, geldig voor
     # afstanden < enkele honderden meters, dus ruim genoeg hier).
     meters_per_deg_lat: float = 111320.0
+
+    # -- Camera en link --------------------------------------------------
+    # 480x320 met kwaliteit 10: klein genoeg om naast de MJPEG-stream
+    # soepel te blijven, groot genoeg om rook te herkennen. Alleen van
+    # toepassing op de stock CameraWebServer (/status + /control); de
+    # eigen firmware van de drone heeft die endpoints niet.
+    camera_width: int = 480
+    camera_height: int = 320
+    camera_quality: int = 10
+    # Poll-cadans van /api/data. De sensor ververst op 8 Hz; 4 Hz is
+    # vloeiend en laat genoeg band over voor de RGB-stream.
+    poll_interval_s: float = 0.25
+    # Een positie ouder dan dit levert geen brandcoördinaten meer op.
+    # /api/gps komt op 1 Hz; valt die weg (zwakke link) dan komt het
+    # warmtebeeld vaak wél door. Rekenen met een oude positie geeft
+    # coördinaten die niet meer kloppen, dus na 3 s zeggen we "positie te
+    # oud" in plaats van te gokken.
+    max_position_age_s: float = 3.0
 
 
 # Eén gedeelde standaardconfiguratie voor het hele programma.

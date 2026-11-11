@@ -5,15 +5,20 @@ buiten dit pakket bij de teamgenoot / main_demo. Daardoor is de hele
 keten testbaar met gesimuleerde lijsten.
 
 Volgorde = de drie teamstappen:
-1. thermal.find_hotspots  (laag 1: grootste warmtepunten)
-2. classify.classify_all   (laag 2: is het een bosbrand? + meerdere)
-3. geo.locate_hotspot      (per brand: echte coördinaten via hoogte +
+1. thermal.assess_frame   (is dit frame bruikbaar? sensor op temperatuur?)
+2. thermal.find_hotspots  (laag 1: grootste warmtepunten)
+3. classify               (laag 2: brand, verdacht of ruis)
+4. geo.locate_hotspot     (per brand: echte coördinaten via hoogte +
                            pixelverschuiving + heading)
 
 Locatie is een voorrecht, geen recht: zonder bruikbare hoogte, zonder
 geldige dronepositie of met een te zwakke GPS-fix melden we de brand wél,
 maar verzinnen we geen coördinaten. Dat is in het veld het verschil
 tussen "geen brand" en "brand, locatie onbekend".
+
+Een onbruikbaar frame (sensor net aan, verzadigd beeld) levert NOOIT een
+brand op: de temperaturen zijn dan geen meting. De operator ziet de
+waarschuwing en de hotspots als diagnose, geen alarmering.
 """
 
 import math
@@ -46,8 +51,22 @@ def _valid_position(lat, lon):
     return not (lat == 0.0 and lon == 0.0)
 
 
-def _location_blocker(lat, lon, agl, gps_fix):
+def _location_blocker(lat, lon, agl, gps_fix, position_age_s=None,
+                      cfg=DEFAULT):
     """Waarom er géén locatie berekend kan worden (None = wel berekenen)."""
+    if position_age_s is not None:
+        try:
+            ouder = float(position_age_s)
+        except (TypeError, ValueError):
+            ouder = None
+        if ouder is not None and ouder > cfg.max_position_age_s:
+            # Op een zwakke link komt het warmtebeeld door terwijl /api/gps
+            # wegvalt. De oude positie blijft in beeld (met leeftijd, zie
+            # drone.gps_age_s), maar levert geen coördinaten meer op: die
+            # zouden niet meer kloppen. De tekst is bewust constant (geen
+            # seconden erin): anders verandert de waarschuwing elk frame en
+            # loopt het logboek vol met dezelfde regel.
+            return "geen locatie: positie te oud (GPS valt weg)"
     if agl is None:
         return "geen locatie: hoogte ontbreekt (GPS nog geen 3D-fix)"
     if agl <= 0:
@@ -62,17 +81,21 @@ def _location_blocker(lat, lon, agl, gps_fix):
 
 
 def detect_event(frame, drone_lat, drone_lon, heading_deg,
-                 gps_alt_now, gps_alt_launch, gps_fix=None, cfg=DEFAULT):
+                 gps_alt_now, gps_alt_launch, gps_fix=None,
+                 position_age_s=None, cfg=DEFAULT):
     """Verwerk één meetmoment. Retourneert een plat dict (JSON-klaar).
 
     - 'fires' bevat alleen geclassificeerde branden, elk verrijkt met
       locatie (hotspot_lat/lon, afstand) als die te berekenen is.
-    - 'hotspots' bevat ALLE blobs (ook afgekeurde) voor diagnose.
+    - 'hotspots' bevat ALLE blobs met hun oordeel (brand/verdacht/ruis),
+      voor diagnose en voor de "waarom" in de UI.
+    - 'sensor_warning' legt uit waarom een frame onbruikbaar is.
     - 'location_warning' legt uit waarom coördinaten ontbreken.
     - Ontbrekende hoogte (gps_alt_now/launch None) is geen crash: AGL
       wordt None en de brand komt zonder locatie in de lijst.
     """
-    ambient, threshold, hotspots = thermal.find_hotspots(frame, cfg)
+    ambient, problemen = thermal.assess_frame(frame, cfg)
+    _, threshold, hotspots = thermal.find_hotspots(frame, cfg)
 
     if gps_alt_now is None or gps_alt_launch is None:
         agl = None
@@ -80,8 +103,16 @@ def detect_event(frame, drone_lat, drone_lon, heading_deg,
         agl = geo.agl_from_gps(gps_alt_now, gps_alt_launch)
 
     heading = 0.0 if heading_deg is None else float(heading_deg)
-    fires = classify.classify_all(hotspots, ambient, cfg)
-    warning = _location_blocker(drone_lat, drone_lon, agl, gps_fix)
+
+    beoordeeld = [
+        {**hotspot, **classify.classify_hotspot(hotspot, ambient, cfg)}
+        for hotspot in hotspots
+    ]
+    fires = [] if problemen else [dict(b) for b in beoordeeld
+                                  if b["level"] == "fire"]
+
+    warning = _location_blocker(drone_lat, drone_lon, agl, gps_fix,
+                                position_age_s, cfg)
     for brand in fires:
         if warning is not None:
             brand.update({"hotspot_lat": None, "hotspot_lon": None,
@@ -101,8 +132,11 @@ def detect_event(frame, drone_lat, drone_lon, heading_deg,
         "agl_m": None if agl is None else round(agl, 1),
         "height_warning": None if agl is None else geo.check_height(agl, cfg),
         "location_warning": warning,
+        "sensor_warning": ("sensor: " + "; ".join(problemen)
+                           if problemen else None),
         "n_hotspots": len(hotspots),
         "n_fires": len(fires),
-        "hotspots": hotspots,
+        "n_suspects": sum(1 for b in beoordeeld if b["level"] == "suspect"),
+        "hotspots": beoordeeld,
         "fires": fires,
     }

@@ -56,8 +56,9 @@ def main():
     drone = dict(lat=52.090000, lon=4.310000, heading=90.0,
                  alt_nu=25.0, alt_lancering=10.0)
 
-    # Scenario 1: één brand rechts-voor in beeld.
-    frame_brand = make_frame(vlekken=[(20, 8, 85.0, 2.5)])
+    # Scenario 1: één brand rechts-voor in beeld (250 C kern; een echt
+    # vuur op 15 m AGL leest honderden graden in de heetste pixel).
+    frame_brand = make_frame(vlekken=[(20, 8, 250.0, 2.5)])
     toon_heatmap(frame_brand)
     resultaat = pipeline.detect_event(frame_brand, drone["lat"], drone["lon"],
                                       drone["heading"], drone["alt_nu"],

@@ -87,14 +87,24 @@ def test_thermische_keten():
             check("thermal" in state, "/api/state antwoordt",
                   "sleutels: %s" % ", ".join(sorted(state)[:6]))
 
-            frame = make_frame(vlekken=[(16, 10, 85.0, 2.5)])
+            frame = make_frame(vlekken=[(16, 10, 250.0, 2.5)])
             payload = {"frame": frame, "drone": DRONE,
                        "gps_alt_launch": ALT_LANCERING}
             antwoord = _vraag(base + "/api/ingest", payload)
             check(antwoord.get("ok") is True, "POST /api/ingest geaccepteerd",
                   json.dumps(antwoord)[:120])
+            check(antwoord.get("n_fires") == 0
+                  and antwoord.get("n_suspects") == 1,
+                  "eerste frame is 'verdacht', nog geen brand",
+                  "n_fires=%s n_suspects=%s" % (antwoord.get("n_fires"),
+                                                antwoord.get("n_suspects")))
+            # Tweede frame: dezelfde plek heet, maar een nieuwe meting. (Een
+            # identiek frame telt bewust niet als tweede meting.)
+            tweede = dict(payload, frame=list(frame))
+            tweede["frame"][0] += 0.1
+            antwoord = _vraag(base + "/api/ingest", tweede)
             check(antwoord.get("n_fires", 0) >= 1,
-                  "warme vlek gedetecteerd als brand",
+                  "warme vlek bevestigd als brand in twee frames",
                   "n_fires=%s" % antwoord.get("n_fires"))
 
             state = _vraag(base + "/api/state")
@@ -145,7 +155,7 @@ def test_nmea_keten():
         base = "http://127.0.0.1:%d" % httpd.server_address[1]
         try:
             antwoord = _vraag(base + "/api/ingest", {
-                "frame": make_frame(vlekken=[(16, 10, 85.0, 2.5)]),
+                "frame": make_frame(vlekken=[(16, 10, 250.0, 2.5)]),
                 "nmea": NMEA,
             })
             check(antwoord.get("ok") is True,
