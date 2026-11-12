@@ -10,7 +10,7 @@ Short project description (edit me).
 Geen installatie nodig: alleen Python 3 (stdlib, werkt offline).
 
 ```bash
-python3 tests/test_sauron.py   # 43 tests, moeten allemaal slagen
+python3 tests/test_sauron.py   # 51 tests, moeten allemaal slagen
 ```
 
 ## Netwerk Architectures
@@ -52,10 +52,16 @@ ESP32 op het WiFi-access point naar `http://<laptop-ip>:8000/api/ingest` kan
 POSTen; de startup-regel print dat LAN-adres. Alleen lokaal testen kan met
 `--host 127.0.0.1`.
 
-De header toont **Sauron**, of er verbinding is (`verbonden` / `niet
-verbonden`) en een knop **nieuwe vlucht**. Die knop sluit de huidige vlucht
-af, bewaart hem in `logs/` en reset alle live-data (drone, branden, frame,
-logboek).
+Bij het openen toont het dashboard alleen het startscherm: de titel, een
+knop **start vlucht**, een veld **vluchtnaam** en hoeveel van de vier
+systemen groen zijn (verbinding, GPS-fix, warmtecamera, RGB-camera). De
+ESP32-data stroomt al binnen, maar er wordt nog niets gelogd.
+
+Zodra je een vlucht start, verschijnt het volledige dashboard. De header
+toont de vluchtnaam en de **duur**; met **stop vlucht** sluit je de vlucht
+af. Het vluchtbestand wordt gewoon in `logs/` bewaard en bevat de
+vluchtnaam in `flight_start` (en `flight_end`); daarna komt het startscherm
+terug en zijn alle live-data gereset.
 
 ### Branden over meerdere frames
 
@@ -72,9 +78,28 @@ archiveert ze na 120 s; de header zegt dan "niet verbonden".
 
 Een brand geldt pas als **bevestigd** na twee metingen op dezelfde plek;
 daarvoor staat hij als *verdacht* (amber, gestreept) in de UI en telt hij
-niet als brandmelding. De drempels zijn absoluut én relatief: brand vanaf
-90 °C én +45 °C boven de omgeving, verdacht vanaf 60 °C én +30 °C.
-Zonverwarmde stenen, daken en asfalt (55-70 °C) vallen daardoor af. Een
+niet als brandmelding. De hoofdregel is de **sprong boven de omgeving**: brand vanaf +60 °C,
+verdacht vanaf +30 °C. Een vaste temperatuur als brandgrens werkt niet: een
+echte brand las op 1 m 49-116 °C (velddata 11 nov), en op hoogte vult een
+vlam soms minder dan één pixel, waardoor de gemeten waarde verder zakt — de
+sprong blijft. Passieve oppervlakken (steen, dakpan, asfalt, 55-70 °C in de
+zon) halen 40-50 °C boven de lucht en vallen af. Dichtbij, met de vlam vol
+in beeld, geldt als tweede weg ≥ 90 °C én +45 °C. Een blob telt vanaf
+3 pixels, of vanaf één pixel als hij ≥ 60 °C boven de omgeving uitkomt (of
+≥ 200 °C leest): een vlam die kleiner is dan één pixel op 30 m telt dus wél
+mee.
+
+Daarnaast telt de **lokale sprong**: elke vlek wordt ook vergeleken met een
+ring cellen direct eromheen, niet alleen met de mediaan van het hele beeld.
+Een vlam die op hoogte maar één cel vult zakt in absolute temperatuur maar
+blijft heter dan de grond naast hem; +45 °C lokaal (en ≥ 50 °C absoluut, en
+vanaf 3 cellen een hete kern van ≥ 6 °C boven het vlek­gemiddelde) is een
+brand. Zo werd een echt vuur dat 25 s op 45-66 °C stond (11 nov 14:50) niet
+langer gemist. Een groot zonverwarmd dak heeft een ring die net zo warm is
+als het dak zelf, een steen is vlak van temperatuur: die vallen af. Hete
+cellen met kleine koude gaten ertussen (rook, één cel net onder de drempel)
+worden samengevoegd, zodat één vlam één hotspot is en niet drie losse
+1-pixel-tracks. Een
 frame met een mediaan buiten -15..70 °C of meer dan 15 % verzadigde pixels
 is geen meting: dat geeft een sensorwaarschuwing en geen branden. Twee
 exact identieke frames gelden als één meting (bevroren sensorread).
@@ -95,6 +120,14 @@ Dode pixels van de MLX90640 en I2C-uitschieters (buiten -20..350 °C)
 worden vóór detectie én vóór het canvas door de mediaan van het frame
 vervangen. Anders wordt één kapot pixel een "brand" met coördinaten en
 schaalt de kleurenkaart op 1200 °C, waardoor de rest van het veld ijs lijkt.
+Uitzondering: een aaneengesloten gebied van minstens 6 cellen boven 350 °C
+is geen leesfout maar een bron heter dan de sensor aankan (een vlam dichtbij
+las 640 °C); dat gebied wordt op 350 °C geklemd en telt gewoon als heet.
+
+Het warmtebeeld gebruikt een vaste kleurenschaal op absolute temperatuur
+(onderkant mee met de omgeving, brandgrens bij 90 °C als harde overgang),
+met een legenda onder het beeld. Geen percentiel-autogain meer: daarmee
+klipte elke hete pixel op rood en leken 80 °C en 130 °C hetzelfde.
 
 ### Vluchtbestanden
 

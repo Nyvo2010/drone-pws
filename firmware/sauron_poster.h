@@ -444,8 +444,12 @@ static void sauronBegin() {
       "[sauron] MLX90640 NIET gevonden."
     );
 
-    Serial.println(
-      "[sauron] Controleer 3V3, GND, SDA GPIO47 en SCL GPIO48."
+    // De pinnen uit de defines noemen, niet een oud pinplan: een verkeerde
+    // hint kost een half uur zoeken naar een fout die er niet is.
+    Serial.printf(
+      "[sauron] Controleer 3V3, GND, SDA GPIO%d en SCL GPIO%d.\n",
+      SAURON_SDA,
+      SAURON_SCL
     );
 
     Serial.println(

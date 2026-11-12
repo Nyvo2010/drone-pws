@@ -60,10 +60,19 @@ class State:
     # Actieve waarschuwing van de laatste meting (hoogte of ontbrekende
     # locatie), zodat de operator hem ziet en niet alleen in het logboek.
     warning: str | None = None
+    # Waarom er géén warmtebeeld is, in de taal van de firmware (bv.
+    # "mlx90640_not_found"). De UI zet dit in het lege thermische paneel:
+    # zonder deze regel zag de operator alleen "geen thermisch frame" en
+    # moest hij in het logboek zoeken of het bord of de laptop het probleem
+    # was. None = er is (weer) een beeld.
+    thermal_fault: str | None = None
 
     # -- Vlucht -----------------------------------------------------------
-    # {id, file, started} van de recorder; None als er niet gelogd wordt.
+    # {id, file, started, name} van de recorder; None als er niet gelogd wordt.
     flight: dict | None = None
+    # True zolang een vlucht loopt. Vóór de start (systemen controleren) en
+    # na de stop toont de UI het startscherm in plaats van het dashboard.
+    flight_active: bool = False
 
     # -- Placeholders (teamgenoot / later) ------------------------------
     # Batterij: straks {"voltage_v": .., "percent": ..}; nu None = "—".
@@ -120,10 +129,14 @@ class State:
         self.link = None
         self.gps_age_s = None
         self.warning = None
+        self.thermal_fault = None
         self.flight = None
+        self.flight_active = False
         self.battery = None
         self.mode = "MANUAL"
-        self.rgb_url = "http://192.168.4.1:81/stream"
+        # rgb_url is een instelling (welke stream), geen vluchtdata: de
+        # poll-lus zet hem één keer bij de start en een nieuwe vlucht mag
+        # een afwijkende --esp-url niet terugzetten naar de fabriekswaarde.
         self.autonomy_advice = None
         self._logs.clear()
         self._log_times.clear()
@@ -165,7 +178,9 @@ class State:
             "rgb_url": self.rgb_url,
             "last_update": self.last_update,
             "warning": self.warning,
+            "thermal_fault": self.thermal_fault,
             "flight": self.flight,
+            "flight_active": self.flight_active,
             "autonomy": {
                 "enabled": self.autonomy_enabled,
                 "advice": self.autonomy_advice,

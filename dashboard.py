@@ -97,7 +97,77 @@ def camera_opzetten(client, size, quality):
              gelezen.get("hmirror"), gelezen.get("vflip"))
 
 
-def status_melding(client, vorige):
+def _signaal_waarschuwing(status, gezondheid, app):
+    """Log een blijvend signaalprobleem één keer (en het herstel ook).
+
+    Twee dingen die je over HTTP wél kunt zien maar die nergens in de UI
+    terechtkwamen: een GPS die geen bytes meer levert (stroom/kabel) en een
+    warmtecamera waarvan elke read mislukt. Zonder deze regel zie je alleen
+    "geen data" en zoek je op de verkeerde plek.
+    """
+    if app is None:
+        return
+    gps = status.get("gps") or {}
+    thermal = status.get("thermal") or {}
+    camera = status.get("camera")
+
+    # cameraReady=false: esp_camera_init() is op het bord mislukt. De stream
+    # op :81 bestaat dan wél, maar levert nooit een frame — in de UI lijkt dat
+    # op "stream bezet" terwijl de camera zelf het probleem is.
+    if camera is False and not gezondheid.get("camera_kapot"):
+        gezondheid["camera_kapot"] = True
+        app.state.add_log(
+            "camera-init mislukt op het bord: /stream kan geen beeld leveren "
+            "(camera, ribbon of voeding controleren)")
+    elif camera and gezondheid.get("camera_kapot"):
+        gezondheid["camera_kapot"] = False
+        app.state.add_log("camera op het bord is weer beschikbaar")
+
+    # Uptime uit de firmware (millis bij het laatste streamframe). Gaat die
+    # terug, dan is het bord herstart en beginnen bytes_seen en de
+    # UBX-teller weer bij 0. Zonder deze regel lijkt dat op een stille GPS
+    # terwijl de echte oorzaak een reset (stroom/brownout) is.
+    uptime = (status.get("stream") or {}).get("last_frame_at_ms")
+    vorige_uptime = gezondheid.get("uptime_ms")
+    if (isinstance(uptime, int) and isinstance(vorige_uptime, int)
+            and uptime < vorige_uptime - 1000):
+        gezondheid.pop("gps_stil", None)
+        gezondheid.pop("bytes", None)
+        gezondheid.pop("thermal_kapot", None)
+        app.state.add_log(
+            "ESP32 herstart (uptime terug naar %d s) — stroom/brownout "
+            "controleren" % (uptime // 1000))
+    if isinstance(uptime, int):
+        gezondheid["uptime_ms"] = uptime
+
+    bytes_nu = gps.get("bytes_seen")
+    vorige_bytes = gezondheid.get("bytes")
+    if isinstance(bytes_nu, int) and isinstance(vorige_bytes, int):
+        if bytes_nu == vorige_bytes and not gezondheid.get("gps_stil"):
+            gezondheid["gps_stil"] = True
+            app.state.add_log(
+                "GPS-UART stil: 0 bytes in 10 s (fix %s, %s sat) — "
+                "controleer stroom/kabel van de GPS"
+                % (gps.get("fix_type"), gps.get("satellites")))
+        elif bytes_nu != vorige_bytes and gezondheid.get("gps_stil"):
+            gezondheid["gps_stil"] = False
+            app.state.add_log("GPS-UART praat weer")
+    if isinstance(bytes_nu, int):
+        gezondheid["bytes"] = bytes_nu
+
+    melding = str(thermal.get("status") or "")
+    kapot = thermal.get("available") is False or "error" in melding
+    if kapot and not gezondheid.get("thermal_kapot"):
+        gezondheid["thermal_kapot"] = True
+        app.state.add_log(
+            "warmtecamera levert geen frames (%s leesfouten: %s)"
+            % (thermal.get("frame_errors"), melding or "onbekend"))
+    elif not kapot and gezondheid.get("thermal_kapot"):
+        gezondheid["thermal_kapot"] = False
+        app.state.add_log("warmtecamera levert weer frames")
+
+
+def status_melding(client, vorige, app=None, gezondheid=None):
     """Log wifi/camera/thermal-status als die verandert (geen spam).
 
     /api/status bevat de WiFi-kwaliteit (RSSI van de laptop), het aantal
@@ -114,23 +184,32 @@ def status_melding(client, vorige):
         "clients": wifi.get("clients"),
         "thermal": status.get("thermal"),
         "gps": status.get("gps"),
+        "camera": status.get("camera"),
         "stream_frames": (status.get("stream") or {}).get("frames_sent"),
     }
     if kern != vorige:
         LOG.info("ESP32-status: %s", json.dumps(kern, ensure_ascii=False))
+    _signaal_waarschuwing(status, gezondheid if gezondheid is not None
+                          else {}, app)
     return kern
 
 
 def rgb_capture_loop(client, directory, every):
-    """Bewaar periodiek een RGB-foto (--capture-rgb SEC)."""
+    """Bewaar periodiek een RGB-foto (--capture-rgb SEC).
+
+    De firmware van de drone heeft geen `/capture` (alleen `/api/*` en
+    `:81/stream`). Dan valt er niets te bewaren: dat één keer zeggen en
+    stoppen is eerlijker dan elke N seconden een mislukking loggen.
+    """
     map_ = Path(directory) / "rgb"
     map_.mkdir(parents=True, exist_ok=True)
     while True:
         time.sleep(every)
         jpeg = client.capture()
         if not jpeg:
-            LOG.warning("RGB-foto mislukt (camera bezet of geen antwoord)")
-            continue
+            LOG.warning("RGB-foto's overgeslagen: deze firmware heeft geen "
+                        "/capture (alleen de MJPEG-stream op :81)")
+            return
         pad = map_ / ("rgb-%s.jpg" % datetime.now().strftime("%Y%m%d-%H%M%S"))
         try:
             pad.write_bytes(jpeg)
@@ -146,15 +225,55 @@ def _diagnose_log(base_url):
     LOG.warning("ESP32 niet bereikbaar (%s): %s", soort, uitleg)
 
 
+def _thermal_reden(thermisch):
+    """Waarom er geen warmtebeeld is, in de taal van de firmware.
+
+    `/api/data` zegt alleen `{"frame":null,"thermal_available":false}`; de
+    reden staat in `/api/status` (bv. `mlx90640_not_found`,
+    `mlx90640_frame_error`). Zonder deze regel bleef het bij "geen
+    thermisch frame" en moest de operator raden of het bord of de laptop
+    het probleem was.
+    """
+    if not isinstance(thermisch, dict):
+        return "geen warmtebeeld"
+    melding = str(thermisch.get("status") or "").strip()
+    fouten = thermisch.get("frame_errors")
+    if melding and melding.lower() not in ("ok", "ready"):
+        # Het aantal leesfouten erbij: een constante 3 is een hapering, een
+        # oplopende 239 is een sensor die elektrisch wegvalt.
+        if isinstance(fouten, int) and fouten > 0:
+            return "%s (%d leesfouten)" % (melding, fouten)
+        return melding
+    if thermisch.get("available") is False:
+        if isinstance(fouten, int) and fouten:
+            return "sensor niet beschikbaar (%d leesfouten)" % fouten
+        return "sensor niet beschikbaar"
+    return "geen vers frame"
+
+
+def _link_regel(latentie, interval, frames_fout, frames_ok, resultaten,
+                gps_leeftijd):
+    """Linkstatistieken voor State.link, ook als er geen frame is."""
+    return {
+        "latency_ms": round(latentie, 1),
+        "interval_s": round(interval, 3),
+        "misses": frames_fout,
+        "ok": frames_ok,
+        "ok_pct": (round(100.0 * sum(resultaten) / len(resultaten), 1)
+                   if resultaten else None),
+        "gps_age_s": gps_leeftijd,
+    }
+
+
 def esp32_loop(app, base_url=esp32.DEFAULT_BASE_URL, interval=0.25,
                camera_size=(480, 320), camera_quality=10, setup_camera=True,
                capture_rgb=0.0):
     """Poll /api/data + /api/gps en voer elk frame als ingest uit.
 
     De firmware van de drone serveert het warmtebeeld als GET; hij POST
-    niets. De sensor ververst op 8 Hz (SAURON_READ_INTERVAL_MS = 125),
-    dus 4 polls per seconde geven een vloeiend beeld zonder het bord te
-    overvragen.
+    niets. De sensor leest op 16 Hz (SAURON_READ_INTERVAL_MS = 62) en
+    /api/data geeft alleen een frame dat < 1 s oud is, dus 4 polls per
+    seconde geven een vloeiend beeld zonder het bord te overvragen.
 
     Wat deze lus doet voor een stabiele verbinding:
     - vaste cadans (rekenen vanaf de vorige deadline, niet vanaf "nu");
@@ -187,11 +306,17 @@ def esp32_loop(app, base_url=esp32.DEFAULT_BASE_URL, interval=0.25,
 
     camera_done = not setup_camera
     vorige_status = None
+    gezondheid = {}
     gps = None
+    gps_status = None  # gps-blok uit /api/status (ruwe UBX-fix en sats)
     gps_tijd = None  # moment waarop /api/gps voor het laatst antwoordde
     teller = 0
     gemist = 0
     gemeld = set()
+    # Laatste thermische storing. De MLX90640 flappert in de praktijk (soms
+    # wel, soms geen I2C-antwoord), dus één regel per storing in plaats van
+    # eentje per pool van 250 ms.
+    storing = None
     volgende = time.monotonic()
     laatste_stat = time.monotonic()
     laatste_diagnose = 0.0
@@ -227,7 +352,14 @@ def esp32_loop(app, base_url=esp32.DEFAULT_BASE_URL, interval=0.25,
         teller += 1
 
         if teller % 40 == 0:
-            vorige_status = status_melding(client, vorige_status)
+            vorige_status = status_melding(client, vorige_status, app,
+                                           gezondheid)
+            gps_status = (vorige_status or {}).get("gps")
+
+        # /api/gps meldt alleen bij een volledige 3D-fix; /api/status heeft
+        # de ruwe UBX-waarden. Samen geven ze "2D · 3 sat" in plaats van
+        # "geen gps" terwijl de ontvanger wel degelijk een fix heeft.
+        gps_nu = esp32.gps_aanvullen(gps, gps_status)
 
         start = time.monotonic()
         data = client.data()
@@ -260,13 +392,31 @@ def esp32_loop(app, base_url=esp32.DEFAULT_BASE_URL, interval=0.25,
                          base_url)
             continue
 
-        body = esp32.parse_data(data, gps)
+        # Leeftijd van de positie, alleen als die uit de 1 Hz-/api/gps
+        # komt: een `drone`-blok in /api/data is per frame vers.
+        vers_drone = isinstance(data.get("drone"), dict) and bool(data["drone"])
+        gps_leeftijd = None
+        if not vers_drone and gps_tijd is not None:
+            gps_leeftijd = round(time.monotonic() - gps_tijd, 1)
+        link = _link_regel(latentie, interval, frames_fout, frames_ok,
+                           resultaten, gps_leeftijd)
+
+        body = esp32.parse_data(data, gps_nu)
         if body is None:
+            # Geen (vers) warmtebeeld. De reden komt van het bord zelf
+            # (/api/status): "mlx90640_not_found" is een andere storing dan
+            # een afgekapt frame, en de operator moet dat verschil zien.
+            thermisch = (vorige_status or {}).get("thermal") or {}
             if not data.get("thermal_available", True):
-                # Camera nog niet klaar: geen linkfout, wel even wachten.
-                if "koud" not in gemeld:
-                    gemeld.add("koud")
-                    st.add_log("warmtecamera nog niet klaar")
+                app.state.thermal_fault = _thermal_reden(thermisch)
+                # WiFi, GPS en de RGB-stream kunnen gewoon leven (kapotte
+                # MLX90640). Zonder note_link zei het dashboard "niet
+                # verbonden" en was de GPS onzichtbaar, terwijl /api/gps elk
+                # frame netjes antwoordde.
+                app.note_link(link=link, drone=esp32.gps_velden(gps_nu))
+                if app.state.thermal_fault != storing:
+                    storing = app.state.thermal_fault
+                    st.add_log("warmtecamera: geen beeld (%s)" % storing)
                 continue
             # Wél antwoord, maar geen bruikbaar frame (afgekapt of een
             # verkeerd aantal waarden). Als gemiste poll behandelen: één
@@ -289,6 +439,9 @@ def esp32_loop(app, base_url=esp32.DEFAULT_BASE_URL, interval=0.25,
         if gemeld:
             gemeld = set()
             st.add_log("thermische frames komen binnen")
+        if storing is not None:
+            st.add_log("warmtecamera levert weer beeld (was: %s)" % storing)
+            storing = None
 
         # Wat het bord zelf over dit frame zegt (min/max/hotspot, GPS):
         # klein genoeg om altijd in het vluchtbestand te zetten. Zo is
@@ -299,22 +452,16 @@ def esp32_loop(app, base_url=esp32.DEFAULT_BASE_URL, interval=0.25,
         if gps is not None:
             meta["gps"] = gps
 
-        # Leeftijd van de positie, alleen als die uit de 1 Hz-/api/gps
-        # komt: een `drone`-blok in /api/data is per frame vers.
-        vers_drone = isinstance(data.get("drone"), dict) and bool(data["drone"])
-        gps_leeftijd = None
-        if not vers_drone and gps_tijd is not None:
-            gps_leeftijd = round(time.monotonic() - gps_tijd, 1)
+        if gps_leeftijd is not None:
             body["drone"] = dict(body.get("drone") or {},
                                  age_s=gps_leeftijd)
 
-        link = {"latency_ms": round(latentie, 1),
-                "interval_s": round(interval, 3),
-                "misses": frames_fout,
-                "ok": frames_ok,
-                "ok_pct": (round(100.0 * sum(resultaten) / len(resultaten), 1)
-                           if resultaten else None),
-                "gps_age_s": gps_leeftijd}
+        # Oriëntatie op één plek: het beeld zoals de operator meekijkt, vóór
+        # detectie én weergave. Zo blijven kaders en coördinaten consistent.
+        if app.cfg.mirror_frame_x:
+            body["frame"] = esp32.spiegel_frame_x(body["frame"],
+                                                 app.cfg.width,
+                                                 app.cfg.height)
 
         try:
             app.ingest_body(body, link=link, meta=meta)
@@ -325,6 +472,7 @@ def esp32_loop(app, base_url=esp32.DEFAULT_BASE_URL, interval=0.25,
 
         frames_ok += 1
         resultaten.append(1)
+        app.state.thermal_fault = None
         if not camera_done:
             # Pas instellen als het bord echt antwoordt: zo kost een bord dat
             # uit staat geen extra wachttijd, en staan de instellingen goed
@@ -366,7 +514,7 @@ def main():
                              "meestuurt")
     parser.add_argument("--interval", type=float, default=0.25,
                         help="seconden tussen twee warmtebeeld-polls "
-                             "(standaard 0.25 = 4 Hz; sensor is 8 Hz)")
+                             "(standaard 0.25 = 4 Hz; sensor leest op 16 Hz)")
     parser.add_argument("--esp-url", default=esp32.DEFAULT_BASE_URL,
                         help="basis-URL van de ESP32 (standaard %s)"
                              % esp32.DEFAULT_BASE_URL)
@@ -391,11 +539,10 @@ def main():
     applog.install_excepthooks()
     LOG.info("Sauron start; logbestand %s", logbestand)
     cfg = DEFAULT
-    LOG.info("detectie: brand >= %.0f C en +%.0f C boven omgeving, "
-             "verdacht >= %.0f C en +%.0f C, bevestigd na %d metingen",
-             cfg.fire_min_abs_c, cfg.fire_min_delta_c,
-             cfg.suspect_min_abs_c, cfg.suspect_min_delta_c,
-             cfg.confirm_observations)
+    LOG.info("detectie: brand bij +%.0f C boven omgeving (of >= %.0f C en "
+             "+%.0f C), verdacht bij +%.0f C, bevestigd na %d metingen",
+             cfg.fire_delta_c, cfg.fire_min_abs_c, cfg.fire_min_abs_delta_c,
+             cfg.suspect_delta_c, cfg.confirm_observations)
 
     recorder = FlightRecorder(args.log_dir, capture_frames=args.capture)
     app = App(recorder=recorder)

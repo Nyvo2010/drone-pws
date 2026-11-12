@@ -105,6 +105,95 @@ def offset_to_latlon(lat, lon, oost_m, noord_m, cfg=DEFAULT):
     return lat + dlat, lon + dlon
 
 
+def _mediaan(waarden):
+    """Mediaan van een lijst getallen (None bij een lege lijst)."""
+    flat = sorted(waarden)
+    if not flat:
+        return None
+    midden = len(flat) // 2
+    if len(flat) % 2 == 1:
+        return float(flat[midden])
+    return float((flat[midden - 1] + flat[midden]) / 2.0)
+
+
+class HeightReference:
+    """Robuuste hoogte boven de grond uit ruizige GPS-hoogte.
+
+    GPS-hoogte ruist makkelijk enkele meters. In de vlucht van 15:26 was
+    het lanceerpunt 3.9 m MSL terwijl de hoogte daarna tussen -2.5 en
+    +6.3 m bewoog: AGL werd 0 tot -6 m en ELKE brand verloor daardoor
+    zijn coördinaten. Twee ingrepen:
+
+    - alleen de GROND wordt gedempt (mediaan over de laatste
+      `alt_window_samples`); de AGL zelf gebruikt de actuele hoogte, zodat
+      een klim meteen klopt en niet een halve seconde achterloopt;
+    - de grond is de LAAGSTE mediaan die we ooit zagen (de drone komt
+      niet onder de grond). Zo wordt AGL nooit negatief door ruis en zet
+      één uitschieter de referentie niet op slot.
+
+    De grond kan ook expliciet gezet worden (`set_ground`), bijvoorbeeld
+    met `--launch-alt` of de lanceerhoogte van de firmware. Een lagere
+    meting wint: een te hoge startwaarde mag de AGL niet klein houden.
+    """
+
+    def __init__(self, cfg=DEFAULT, ground=None):
+        self.cfg = cfg
+        self._samples = []
+        self._smooth = None
+        self._ground = None
+        if ground is not None:
+            self.set_ground(ground)
+
+    def reset(self, ground=None):
+        """Nieuwe vlucht: vergeet de oude samples en referentie."""
+        self._samples = []
+        self._smooth = None
+        self._ground = None
+        if ground is not None:
+            self.set_ground(ground)
+
+    def set_ground(self, ground_m):
+        """Zet de grondhoogte (MSL); alleen een lagere waarde wint."""
+        try:
+            waarde = float(ground_m)
+        except (TypeError, ValueError):
+            return
+        if not math.isfinite(waarde):
+            return
+        if self._ground is None or waarde < self._ground:
+            self._ground = waarde
+
+    def update(self, alt_msl):
+        """Voeg één GPS-hoogte toe; retourneert AGL in meters of None."""
+        if alt_msl is None:
+            return None
+        try:
+            hoogte = float(alt_msl)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(hoogte):
+            return None
+        self._samples.append(hoogte)
+        venster = max(1, self.cfg.alt_window_samples)
+        if len(self._samples) > venster:
+            del self._samples[:len(self._samples) - venster]
+        self._smooth = _mediaan(self._samples)
+        if self._ground is None or self._smooth < self._ground:
+            self._ground = self._smooth
+        # AGL met de ACTUELE hoogte: de mediaan bepaalt alleen de grond.
+        # Zo is een klim (25 -> 35 m) meteen 10 m en loopt de locatie niet
+        # achter op de vlucht.
+        return max(0.0, hoogte - self._ground)
+
+    @property
+    def ground(self):
+        return self._ground
+
+    @property
+    def smooth(self):
+        return self._smooth
+
+
 def locate_hotspot(drone_lat, drone_lon, heading_deg, agl, x, y, cfg=DEFAULT):
     """Volledige keten: dronepositie + pixel -> hotspot-positie.
 

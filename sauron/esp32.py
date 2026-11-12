@@ -12,12 +12,29 @@ libraries/ESP32/examples/Camera/CameraWebServer). Die onthult precies:  :80/stat
   :81/stream                      MJPEG (draait alleen op builds die de
                                   aparte stream-server starten)
 
-De eigen firmware van de drone (vanaf 21 okt) serveert het warmtebeeld en
-de GPS als GET in plaats van te POSTen:
+De eigen firmware (github.com/CasperBoi14/CameraWebServer_integrated:
+CameraWebServer_integrated.ino + sauron_poster.h) serveert alles als GET:
 
-  :80/api/data                    {"frame": [768] of null,
-                                  "thermal_available": bool, "gps": {...}}
-  :80/api/status                  camera/thermal/gps/wifi-status
+  :80/                            ingebouwde pagina (zet zelf óók :81/stream
+                                  op, dus niet naast het dashboard openen)
+  :80/api/data                    laatste warmtebeeld-JSON: {"frame":[768]|null,
+                                  "thermal_available", "thermal":{min_c,max_c,
+                                  fire,hotspot{x,y}}, "drone":{...} alléén bij
+                                  een geldige positie. Is het frame > 1000 ms
+                                  oud, dan letterlijk {"frame":null,
+                                  "thermal_available":false} — zónder drone
+  :80/api/gps                     {"data_seen","location_valid","lat","lon",
+                                  "alt_msl","heading_deg","speed_mps","fix",
+                                  "sats","hdop"}; niets vers na 2 s -> fix -1
+  :80/api/status                  wifi/camera/thermal/gps/stream; fix_type en
+                                  satellites zijn de ruwe NAV-PVT-waarden,
+                                  location_valid = gnssFixOK-bit
+  :81/stream                      MJPEG (vast QQVGA, kwaliteit 40); één
+                                  client tegelijk, daarna weigert het bord
+
+De stock-endpoints van de Espressif CameraWebServer (/status, /control,
+/capture) bestaan in deze build NIET. status()/set()/capture() hieronder
+zijn voor een andere build en geven op de drone None/False.
 
 Daarom heeft Esp32 naast de CameraWebServer-methoden ook data() en
 api_status(), en parse_data() zet /api/data om in een ingest-pakket.
@@ -50,7 +67,12 @@ DOOD_PIXEL = -999.0
 
 
 def stream_url(base_url=DEFAULT_BASE_URL):
-    """MJPEG-stream-URL (:81/stream) die bij deze ESP32 hoort."""
+    """MJPEG-stream-URL (:81/stream) die bij deze ESP32 hoort.
+
+    De firmware start hiervoor een tweede httpd op poort 81 (`ctrl_port`
+    32769). Eén client tegelijk: de handlerlus stopt pas bij een send-fout
+    of als één frame ≥ 150 ms kost, en dan sluit het bord de verbinding zelf.
+    """
     delen = urllib.parse.urlsplit(base_url.rstrip("/"))
     host = delen.hostname or "192.168.4.1"
     return "%s://%s:81/stream" % (delen.scheme or "http", host)
@@ -409,12 +431,103 @@ UBX_FIX_NAAR_SCHAAL = {0: 0, 1: 1, 2: 1, 3: 2, 4: 2, 5: 0}
 
 
 def normaliseer_fix(waarde):
-    """UBX fixType -> dashboardschaal; onbekend blijft ongewijzigd."""
+    """UBX fixType -> dashboardschaal; onbekend blijft ongewijzigd.
+
+    -1 is de firmwarewaarde voor "geen verse GPS-update" (/api/gps geeft dat
+    na 2 s stilte). Dat is geen fix maar ook geen UBX-status, dus het wordt
+    0 ("geen") in plaats van letterlijk -1 in de UI.
+    """
     try:
         nummer = int(float(waarde))
     except (TypeError, ValueError):
         return waarde
+    if nummer < 0:
+        return 0
     return UBX_FIX_NAAR_SCHAAL.get(nummer, nummer)
+
+
+def spiegel_frame_x(frame, width=32, height=24):
+    """Spiegel een plat frame horizontaal: kolom x wordt width-1-x.
+
+    Eén plek voor de oriëntatie. Detectie, coördinaten (`geo.locate_hotspot`)
+    en de weergave gebruiken daarna allemaal hetzelfde frame; zó kan een
+    gespiegeld beeld nooit coördinaten aan de verkeerde kant opleveren.
+    """
+    return [waarde
+            for rij in range(height)
+            for waarde in reversed(frame[rij * width:(rij + 1) * width])]
+
+
+def gps_aanvullen(gps_data, status_gps):
+    """Vul sats/fix aan uit /api/status als /api/gps ze niet kent.
+
+    De firmware (sauron_poster.h) heeft twee bronnen met een verschillend
+    contract:
+
+    - `/api/gps` (`sauronLaatsteGpsJson`) is alleen gevuld binnen 2 s na de
+      laatste GPS-update; zonder geldige positie geeft hij `fix 0` en
+      `sats -1` (of -1/-1 als er niets vers is).
+    - `/api/status` geeft de ruwe NAV-PVT-waarden: `fix_type`,
+      `satellites` en `location_valid` (`(flags & 1) && fixType >= 2`).
+
+    Het aantal satellieten is ook zónder geldige fix eerlijk ("4 sat, nog
+    geen fix"), dus dat nemen we over zodra /api/gps -1 meldt. De fix
+    alleen als `/api/status` `location_valid` zegt: de firmware zet
+    `fix_type` namelijk ook als de gnssFixOK-bit laag is (live gezien:
+    `fix_type 3, satellites 4, location_valid false`), en dan zou het
+    dashboard "3D" tonen zonder geldige positie.
+
+    Coördinaten worden nooit verzonnen. De fix blijft de **ruwe**
+    UBX-waarde, want `gps_velden` rekent hem daarna één keer om.
+    """
+    if not isinstance(gps_data, dict) or not isinstance(status_gps, dict):
+        return gps_data
+    uit = dict(gps_data)
+
+    def getal(waarde):
+        try:
+            return int(float(waarde))
+        except (TypeError, ValueError):
+            return None
+
+    fix = getal(uit.get("fix"))
+    if (fix is None or fix <= 0) and status_gps.get("location_valid") is True:
+        status_fix = getal(status_gps.get("fix_type"))
+        if status_fix is not None and status_fix > 0:
+            uit["fix"] = status_fix
+
+    sats = getal(uit.get("sats"))
+    if sats is None or sats < 0:
+        status_sats = getal(status_gps.get("satellites"))
+        if status_sats is not None and status_sats >= 0:
+            uit["sats"] = status_sats
+    return uit
+
+
+def gps_velden(gps_data, normaliseer=True):
+    """GPS-JSON (/api/gps) -> drone-velden, tolerant voor strings en nulls.
+
+    Ook bruikbaar zónder warmtebeeld: als de MLX90640 niets levert, wil het
+    dashboard tóch positie, fix en satellieten kunnen tonen. `normaliseer`
+    staat uit in parse_data, want daar wordt pas genormaliseerd nadat het
+    `drone`-blok uit /api/data eroverheen is gelegd (twee keer omrekenen
+    zou een UBX 3D-fix als 2D wegzetten).
+    """
+    velden = {}
+    if not isinstance(gps_data, dict):
+        return velden
+    for sleutel, waarde in gps_data.items():
+        if isinstance(waarde, str) and waarde.strip():
+            try:
+                waarde = float(waarde)
+            except ValueError:
+                pass  # bv. nmea-string: laten staan
+        if waarde is None:
+            continue
+        velden[sleutel] = waarde
+    if normaliseer and "fix" in velden:
+        velden["fix"] = normaliseer_fix(velden["fix"])
+    return velden
 
 
 def parse_data(data, gps_data=None, verwacht=None):
@@ -481,17 +594,7 @@ def parse_data(data, gps_data=None, verwacht=None):
     # /api/gps geeft altijd lat/lon (met nulls) plus fix/sats/hdop. Beide
     # samenvoegen, en een null uit /api/gps mag een echte waarde uit
     # /api/data niet overschrijven.
-    drone = {}
-    if isinstance(gps_data, dict):
-        for sleutel, waarde in gps_data.items():
-            if isinstance(waarde, str) and waarde.strip():
-                try:
-                    waarde = float(waarde)
-                except ValueError:
-                    pass  # bv. nmea-string: laten staan
-            if waarde is None:
-                continue
-            drone[sleutel] = waarde
+    drone = gps_velden(gps_data, normaliseer=False)
     # Het `drone`-blok in /api/data is per frame vers; /api/gps is 1 Hz en
     # kan bij een zwakke link seconden oud zijn. Daarom wint het
     # per-frame-blok, en vult /api/gps alleen aan wat ontbreekt.

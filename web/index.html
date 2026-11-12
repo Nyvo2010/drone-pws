@@ -65,7 +65,133 @@
 
   .head-right { display: flex; align-items: center; gap: 12px; }
 
-  #new-flight { padding: 4px 10px; }
+  .flight-title {
+    max-width: 260px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11px;
+    color: var(--body);
+    letter-spacing: .04em;
+  }
+  .flight-clock {
+    padding: 2px 7px;
+    border: 1px solid var(--hair);
+    border-radius: 4px;
+    font-size: 12px;
+    color: var(--ink);
+    font-variant-numeric: tabular-nums;
+  }
+  .flight-title[hidden],
+  .flight-clock[hidden],
+  #stop-flight[hidden] { display: none; }
+
+  /* ---------- startscherm (nog geen vlucht) ---------- */
+  .start {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 18px;
+    padding: 24px;
+    text-align: center;
+  }
+  .start[hidden] { display: none; }
+
+  .start-kicker {
+    font-size: 9px;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--dim);
+  }
+  .start-title {
+    margin-top: 6px;
+    font-size: clamp(24px, 4vw, 40px);
+    font-weight: 700;
+    letter-spacing: -.02em;
+    line-height: 1.1;
+  }
+
+  .start-systems {
+    min-width: min(320px, 100%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 9px;
+    padding: 14px 18px;
+    background: var(--panel);
+    border: 1px solid var(--hair);
+  }
+  .start-count {
+    font-size: 12px;
+    color: var(--body);
+    font-variant-numeric: tabular-nums;
+  }
+  .start-count strong {
+    margin-right: 3px;
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--ink);
+  }
+  .start-count.all strong { color: var(--success); }
+
+  .sys-list { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; }
+  .sys {
+    padding: 3px 7px;
+    border: 1px solid var(--hair);
+    border-radius: 4px;
+    font-size: 9px;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--mute);
+    white-space: nowrap;
+  }
+  .sys.on { color: var(--success); border-color: rgba(50, 215, 75, .35); }
+
+  .start-field {
+    width: min(320px, 100%);
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    text-align: left;
+  }
+  .start-field span {
+    font-size: 9px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--mute);
+  }
+  .start-field input {
+    padding: 8px 10px;
+    background: var(--panel);
+    border: 1px solid var(--hair-strong);
+    border-radius: 4px;
+    color: var(--ink);
+    font: inherit;
+    outline: none;
+  }
+  .start-field input:focus { border-color: rgba(50, 215, 75, .5); }
+  .start-field input::placeholder { color: var(--dim); }
+
+  .btn-start {
+    padding: 9px 18px;
+    border-color: rgba(50, 215, 75, .4);
+    color: var(--ink);
+    font-size: 11px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+  .btn-start:hover {
+    background: rgba(50, 215, 75, .08);
+    border-color: rgba(50, 215, 75, .6);
+  }
+
+  /* Het dashboard zelf: display:contents houdt de flex-layout van main
+     gelijk; [hidden] zet het als geheel uit. */
+  .dash { display: contents; }
+  .dash[hidden] { display: none; }
 
   /* ---------- warning strip ---------- */
   .warning {
@@ -205,11 +331,45 @@
     image-rendering: pixelated;
   }
 
+  /* Kleurlegenda onder het warmtebeeld: waar ligt de brandgrens (90 C)? */
+  .scale {
+    flex: 0 0 24px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px 0;
+  }
+  .scale[hidden] { display: none; }
+  .scale .lab {
+    font-size: 9px;
+    color: var(--mute);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+  .scale .lab.fire { color: var(--warning); }
+  .scale-bar {
+    position: relative;
+    flex: 1 1 auto;
+    height: 6px;
+    border: 1px solid var(--hair);
+  }
+  .scale-tick {
+    position: absolute;
+    top: -3px;
+    width: 1px;
+    height: 10px;
+    background: var(--ink);
+  }
+
   #rgb {
     display: block;
     width: 100%;
     height: 100%;
     object-fit: contain;
+    /* De camera hangt gespiegeld in de behuizing: horizontaal omklappen
+       zodat links op het scherm ook links in het veld is. Alleen weergave;
+       de opgeslagen JPEG's van de firmware blijven ongewijzigd. */
+    transform: scaleX(-1);
   }
 
   .btn {
@@ -512,8 +672,10 @@
   <header class="top">
     <span class="name">SAURON</span>
     <div class="head-right">
+      <span class="flight-title" id="flight-title" hidden></span>
+      <span class="flight-clock" id="flight-clock" hidden>00:00</span>
       <span class="status idle" id="status" role="status" aria-live="polite">[ ] niet verbonden</span>
-      <button class="btn" id="new-flight" type="button">[nieuwe vlucht]</button>
+      <button class="btn" id="stop-flight" type="button" hidden>[stop vlucht]</button>
     </div>
   </header>
 
@@ -523,6 +685,31 @@
   </div>
 
   <main>
+    <!-- Startscherm: systeemstatus + vluchtnaam. Het dashboard komt pas
+         in beeld als de operator een vlucht start. -->
+    <section class="start" id="start" aria-labelledby="start-title">
+      <div>
+        <span class="start-kicker">sauron · bosbranddetectie</span>
+        <h1 class="start-title" id="start-title">Nieuwe vlucht</h1>
+      </div>
+
+      <div class="start-systems">
+        <div class="start-count" id="sys-count-box">
+          <strong id="sys-count">0 / 4</strong> systemen groen
+        </div>
+        <div class="sys-list" id="sys-list"></div>
+      </div>
+
+      <label class="start-field">
+        <span>vluchtnaam</span>
+        <input id="flight-name" type="text" maxlength="60"
+               autocomplete="off" placeholder="bijv. ochtendvlucht noord">
+      </label>
+
+      <button class="btn btn-start" id="start-flight" type="button">[start vlucht]</button>
+    </section>
+
+    <div class="dash" id="dash" hidden>
     <!-- cameras: boxes sized to their native aspect ratios -->
     <div class="camrow" id="camrow">
       <section class="panel camera thermal" id="thermal-panel" aria-labelledby="thermal-title">
@@ -536,6 +723,12 @@
                     aria-label="Thermisch beeld, 32 bij 24 pixels"></canvas>
             <div class="frame-empty" id="thermal-empty">[ ] geen thermisch frame</div>
           </div>
+        </div>
+        <div class="scale" id="thermal-scale" hidden>
+          <span class="lab" id="scale-lo">—</span>
+          <span class="scale-bar" id="scale-bar"><span class="scale-tick" id="scale-tick"></span></span>
+          <span class="lab" id="scale-hi">—</span>
+          <span class="lab fire" title="brand zodra een blob boven deze grens uitkomt">brand ≥ 90 °C</span>
         </div>
       </section>
 
@@ -608,6 +801,7 @@
         </div>
       </section>
     </div>
+    </div>
   </main>
 </div>
 
@@ -628,18 +822,37 @@
   const rgbFrame = $("rgb-frame");
   const camrow = $("camrow");
 
-  // Koud = blauw, heet = rood. Zo lees je de temperatuurverdeling in
-  // één oogopslag af in plaats van één kleur met wat ruis.
-  const STOPS = [
-    [12, 32, 96],
-    [36, 120, 200],
-    [120, 205, 205],
-    [255, 205, 60],
-    [230, 50, 25],
+  // Kleurenschaal op ABSOLUTE temperatuur, niet op percentielen van het
+  // frame. Met percentiel-autogain lag de bovenkant altijd net boven het
+  // veld, waardoor elke hete pixel op rood klipte: 80 C en 130 C kregen
+  // dezelfde kleur. Nu heeft een temperatuur altijd dezelfde kleur. De
+  // onderste drie punten schuiven mee met de omgeving (winterveld of
+  // zomerveld), de bovenste drie staan vast en de brandgrens (90 C) is
+  // een harde overgang amber -> rood.
+  const KLEUR_PUNTEN = [
+    [-4, [12, 32, 96]],      // koud t.o.v. omgeving
+    [8, [36, 120, 200]],
+    [30, [120, 205, 205]],
+    [90, [255, 205, 60]],    // tot de brandgrens: amber
+    [160, [230, 50, 25]],    // boven de grens: rood
+    [300, [255, 245, 235]],  // verzadigd heet: wit
   ];
+
+  function schaalStops(ambient) {
+    const amb = Number.isFinite(ambient) ? ambient : 20;
+    const temps = [amb - 4, amb + 8, amb + 30, 90, 160, 300];
+    // Op een heel warm veld kunnen de punten kruisen; altijd oplopend houden.
+    for (let i = 1; i < temps.length; i++) {
+      if (temps[i] <= temps[i - 1]) temps[i] = temps[i - 1] + 1;
+    }
+    return temps.map((t, i) => [t, KLEUR_PUNTEN[i][1]]);
+  }
 
   let currentFires = [];
   let lastThermal = null;
+  // Reden van het bord waarom er geen warmtebeeld is (bv.
+  // "mlx90640_not_found"). Leeg = er is beeld of nog niets bekend.
+  let thermalFault = null;
   let lastCells = null;     // laatst getekende frame (voor de labels)
   let lastSeq = null;       // volgnummer van dat frame
   let lastFrameT = null;    // wandkloktijd van dat frame (epoch s)
@@ -649,17 +862,54 @@
   let rgbUrl = null;
   let rgbAspect = 16 / 9;   // fallback tot de stream zich meldt
   let warningShown = false;
+  let lastSlowRender = 0;   // branden/logboek verversen op 1 s, niet 3x/s
+  let flightActive = false; // loopt er een gelogde vlucht?
+  let flightStarted = null; // epoch (s) van de vluchtstart, voor de duur
+  let flightWasActive = null;
 
-  function kleur(t) {
-    t = Math.max(0, Math.min(1, t));
-    const x = t * (STOPS.length - 1);
-    const i = Math.min(Math.floor(x), STOPS.length - 2);
-    const f = x - i;
-    const a = STOPS[i];
-    const b = STOPS[i + 1];
-    return `rgb(${Math.round(a[0] + (b[0] - a[0]) * f)},`
-         + `${Math.round(a[1] + (b[1] - a[1]) * f)},`
-         + `${Math.round(a[2] + (b[2] - a[2]) * f)})`;
+  function rgbCss(rgb) {
+    return `rgb(${Math.round(rgb[0])},${Math.round(rgb[1])},${Math.round(rgb[2])})`;
+  }
+
+  function kleur(temp, stops) {
+    const eerste = stops[0];
+    const laatste = stops[stops.length - 1];
+    if (!(temp > eerste[0])) return rgbCss(eerste[1]);
+    if (temp >= laatste[0]) return rgbCss(laatste[1]);
+    for (let i = 1; i < stops.length; i++) {
+      const a = stops[i - 1];
+      const b = stops[i];
+      if (temp <= b[0]) {
+        const f = (temp - a[0]) / (b[0] - a[0]);
+        return rgbCss([
+          a[1][0] + (b[1][0] - a[1][0]) * f,
+          a[1][1] + (b[1][1] - a[1][1]) * f,
+          a[1][2] + (b[1][2] - a[1][2]) * f,
+        ]);
+      }
+    }
+    return rgbCss(laatste[1]);
+  }
+
+  // Legenda: dezelfde gradient als het beeld, met een streepje op de
+  // brandgrens. Zo zie je meteen welk geel/oranje nog geen brand is.
+  function tekenSchaal(stops) {
+    const el = $("thermal-scale");
+    if (!stops) {
+      el.hidden = true;
+      return;
+    }
+    el.hidden = false;
+    const lo = stops[0][0];
+    const hi = stops[stops.length - 1][0];
+    const pct = (t) => ((t - lo) / (hi - lo)) * 100;
+    $("scale-bar").style.background = "linear-gradient(90deg, "
+      + stops.map(([t, rgb]) => `${rgbCss(rgb)} ${pct(t).toFixed(1)}%`)
+             .join(", ")
+      + ")";
+    $("scale-lo").textContent = fmt(lo, 0, " °C");
+    $("scale-hi").textContent = fmt(hi, 0, " °C");
+    $("scale-tick").style.left = Math.max(0, Math.min(100, pct(90))) + "%";
   }
 
   function fmt(v, d = 1, suffix = "") {
@@ -695,7 +945,7 @@
     const arR = rgbAspect || 16 / 9;
     const gap = 10;
     const chromeX = 18;   // 16 padding + 2 border per paneel
-    const chromeY = 50;   // 32 header + 16 padding + 2 border
+    const chromeY = 74;   // 32 header + 16 padding + 2 border + 24 legenda
     const availW = camrow.clientWidth;
     const availH = camrow.clientHeight;
     if (availW < 240 || availH < 140) return;
@@ -713,6 +963,88 @@
   }
 
   window.addEventListener("resize", layoutCameras);
+
+  // ---------- vlucht + systeemstatus ----------
+  function durationText(seconds) {
+    const totaal = Math.max(0, Math.floor(seconds));
+    const twee = (n) => String(n).padStart(2, "0");
+    const u = Math.floor(totaal / 3600);
+    const m = Math.floor((totaal % 3600) / 60);
+    const s = totaal % 60;
+    return (u ? u + ":" : "") + twee(m) + ":" + twee(s);
+  }
+
+  // De vier systemen die groen moeten zijn vóór de start: verbinding,
+  // GPS-fix, warmtecamera en de RGB-stream. Ze komen uit dezelfde staat
+  // als het dashboard, dus het startscherm liegt niet over de rest.
+  function systemList(state) {
+    const age = state.last_update
+      ? Math.max(0, Date.now() / 1000 - state.last_update) : null;
+    const d = state.drone || {};
+    const frameAge = state.frame && state.frame.t
+      ? Math.max(0, Date.now() / 1000 - state.frame.t) : null;
+    return [
+      { naam: "verbinding", ok: age != null && age <= 3 },
+      { naam: "gps", ok: d.fc_fix != null && d.fc_fix >= 2 },
+      { naam: "warmtecamera",
+        ok: !state.thermal_fault && frameAge != null && frameAge <= 2.5 },
+      { naam: "rgb-camera",
+        ok: !!rgbFrameAt && Date.now() - rgbFrameAt <= 4000 },
+    ];
+  }
+
+  function renderSystems(state) {
+    const lijst = systemList(state);
+    const groen = lijst.filter((s) => s.ok).length;
+    $("sys-count").textContent = groen + " / " + lijst.length;
+    $("sys-count-box").classList.toggle("all", groen === lijst.length);
+
+    const box = $("sys-list");
+    const key = lijst.map((s) => s.naam + (s.ok ? "+" : "-")).join("|");
+    if (box.dataset.key === key) return;
+    box.dataset.key = key;
+    box.textContent = "";
+    for (const s of lijst) {
+      box.appendChild(el("span", "sys" + (s.ok ? " on" : ""),
+        (s.ok ? "[x] " : "[ ] ") + s.naam));
+    }
+  }
+
+  function updateFlightClock() {
+    const klok = $("flight-clock");
+    if (!flightActive) {
+      klok.textContent = "";
+      return;
+    }
+    klok.textContent = flightStarted
+      ? durationText(Date.now() / 1000 - flightStarted) : "00:00";
+  }
+
+  function renderFlight(state) {
+    flightActive = !!state.flight_active;
+    flightStarted = state.flight && state.flight.started
+      ? state.flight.started : null;
+    const naam = (state.flight && state.flight.name) || "vlucht";
+
+    $("start").hidden = flightActive;
+    $("dash").hidden = !flightActive;
+    $("stop-flight").hidden = !flightActive;
+    $("flight-title").hidden = !flightActive;
+    $("flight-clock").hidden = !flightActive;
+    $("flight-title").textContent = naam;
+    $("flight-title").title = naam;
+    updateFlightClock();
+
+    if (!flightActive) renderSystems(state);
+
+    // De camera's hebben pas een maat als het dashboard zichtbaar is.
+    if (flightWasActive !== flightActive) {
+      flightWasActive = flightActive;
+      requestAnimationFrame(layoutCameras);
+    }
+  }
+
+  setInterval(updateFlightClock, 500);
 
   // ---------- status + warning ----------
   function renderStatus(state) {
@@ -736,7 +1068,7 @@
     }
 
     const warn = state.warning;
-    $("warning").hidden = !warn;
+    $("warning").hidden = !warn || !flightActive;
     $("warning-text").textContent = warn || "";
     if (!!warn !== warningShown) {
       warningShown = !!warn;
@@ -754,10 +1086,14 @@
     const age = lastFrameT != null
       ? Math.max(0, Date.now() / 1000 - lastFrameT) : null;
     const meta = $("thermal-meta");
+    // Een bevroren beeld met een oude tijd leest als "live". Zet de reden
+    // van het bord erbij, zodat je ziet dat er géén nieuwe frames komen.
     meta.textContent = "MLX90640 · 32×24"
       + (lastSeq != null ? " · #" + lastSeq : "")
-      + (age != null ? " · " + ageText(age) : "");
-    meta.classList.toggle("alert", age != null && age > 2.5);
+      + (age != null ? " · " + ageText(age) : "")
+      + (thermalFault ? " · " + thermalFault : "");
+    meta.classList.toggle("alert",
+      !!thermalFault || (age != null && age > 2.5));
   }
 
   // Alleen tekenen als er écht een nieuw frame is (seq). Zo blijft het beeld
@@ -769,7 +1105,14 @@
     if (!ok) {
       ctx.fillStyle = "#060607";
       ctx.fillRect(0, 0, W, H);
+      // Zeg WAAROM er geen beeld is: een niet-gevonden sensor op het bord
+      // vraagt om bedrading, een leeg frame om de firmware. "geen frame"
+      // alleen stuurt de operator de verkeerde kant op.
+      empty.textContent = thermalFault
+        ? "[ ] geen warmtebeeld — " + thermalFault
+        : "[ ] geen thermisch frame";
       empty.hidden = false;
+      tekenSchaal(null);
       lastCells = null;
       lastSeq = null;
       lastFrameT = null;
@@ -785,34 +1128,25 @@
     lastSeq = seq == null ? null : seq;
     lastFrameT = frameTime == null ? Date.now() / 1000 : frameTime;
 
-    // Autogain op percentielen (2%..98%), niet op min..max. Met min..max
-    // trok één hete pixel de hele schaal naar boven en werd het veld
-    // volledig donkerblauw; met "ambient - 5 .. ambient + 40" gebeurde
-    // hetzelfde. Nu verdeelt het normale veld zich over blauw -> rood en
-    // klippen echte uitschieters op rood. Een vlak veld krijgt een
-    // minimale spanne van 2 C, zodat het niet als één kleurblok oogt.
+    // Anker voor de koude kant: de omgeving uit de detectie, of (als die
+    // ontbreekt) de mediaan van het frame.
     const gesorteerd = cells.slice().sort((a, b) => a - b);
-    const percentiel = (q) => gesorteerd[
-      Math.min(gesorteerd.length - 1,
-               Math.max(0, Math.round(q * (gesorteerd.length - 1))))
-    ];
-    let lo = percentiel(0.02);
-    let hi = percentiel(0.98);
-    // Minimaal 4 C span: anders schaalt gewone sensorruis het hele veld
-    // van blauw naar oranje en lijkt een koud weiland "heet".
-    if (hi - lo < 4) {
-      const midden = (lo + hi) / 2;
-      lo = midden - 2;
-      hi = midden + 2;
-    }
-    const span = hi - lo;
+    const mediaan = gesorteerd[Math.floor(gesorteerd.length / 2)];
+    const amb = thermal && Number.isFinite(thermal.ambient)
+      ? thermal.ambient : mediaan;
+    const stops = schaalStops(amb);
 
+    // De oriëntatie staat op één plek: de server spiegelt het frame
+    // (Config.mirror_frame_x) voordat het hier aankomt. Dit canvas tekent
+    // dus ongewijzigd; zo wijzen de kaders, het beeld en de berekende
+    // coördinaten altijd dezelfde kant op.
     for (let y = 0; y < 24; y++) {
       for (let x = 0; x < 32; x++) {
-        ctx.fillStyle = kleur((cells[y * 32 + x] - lo) / span);
+        ctx.fillStyle = kleur(cells[y * 32 + x], stops);
         ctx.fillRect(x * CW, y * CH, CW, CH);
       }
     }
+    tekenSchaal(stops);
 
     // Heetste pixel van elke brand: wit kader (bevestigd) of amber
     // streepjes (verdacht), met een donkere kern op de pixel zelf.
@@ -845,12 +1179,21 @@
   let rgbFrameAt = 0;
   let rgbPending = null;    // nieuwste ontvangen frame, nog niet getekend
   let rgbRendered = null;   // laatst getekende frame
+  // Elke herverbinding kost op de ESP32 een socket (de httpd heeft er zeven
+  // per poort). De firmware sluit de stream zélf zodra één frame ≥ 150 ms
+  // kost (STREAM_SEND_SLOW_US) en zijn eigen pagina herverbindt dan binnen
+  // 100-500 ms; daarom starten we kort en lopen we maar tot 3 s op. Vroeger
+  // stond hier 1 s → 15 s, waardoor beeld na zo'n afknijping secondenlang
+  // wegbleef terwijl het bord allang weer kon leveren.
+  let rgbBackoff = 400;
+  let rgbLastRestart = 0;
 
   function rgbShow(bytes) {
     const url = URL.createObjectURL(new Blob([bytes], { type: "image/jpeg" }));
     const vorige = rgbObjectUrl;
     rgbObjectUrl = url;
     rgbFrameAt = Date.now();
+    rgbBackoff = 400;   // er komt weer beeld: wachttijd terug naar 400 ms
     rgbImg.src = url;
     $("rgb-fb").hidden = true;
     if (vorige) URL.revokeObjectURL(vorige);
@@ -918,10 +1261,18 @@
           await rgbPump(url, controle.signal);
         } catch (err) {
           if (controle.signal.aborted) return;
+          // De firmware heeft één stream-slot. Mislukt de verbinding terwijl
+          // /api/status wél frames telt, dan kijkt er al iemand anders mee
+          // (andere tab, telefoon of de ingebouwde pagina van het bord).
+          const fb = $("rgb-fb");
+          fb.hidden = false;
+          const regel = fb.querySelector("span");
+          if (regel) regel.textContent = "[!] geen stream: andere client of bord herstart";
         }
         if (controle.signal.aborted) return;
         $("rgb-fb").hidden = false;
-        await new Promise((klaar) => setTimeout(klaar, 1000));
+        await new Promise((klaar) => setTimeout(klaar, rgbBackoff));
+        rgbBackoff = Math.min(rgbBackoff * 2, 3000);
       }
     })();
   }
@@ -948,16 +1299,34 @@
     rgbShow(rgbPending);
   }, 66);
 
-  // Stream die stilvalt (WiFi weg) weer op gang brengen met een nieuwe fetch.
+  // Stream die stilvalt (WiFi weg, camera vast) weer op gang brengen met een
+  // nieuwe fetch — maar niet vaker dan de backoff toelaat, en niet terwijl
+  // het tabblad op de achtergrond staat (daar heeft niemand beeld aan en
+  // elke poging kost het bord een socket).
   setInterval(() => {
     if (!rgbUrl || !rgbFrameAt) return;
-    if (Date.now() - rgbFrameAt <= 3000) return;
+    if (document.hidden) return;
+    if (Date.now() - rgbFrameAt <= 4000) return;
+    if (Date.now() - rgbLastRestart < rgbBackoff) return;
+    rgbLastRestart = Date.now();
+    rgbBackoff = Math.min(rgbBackoff * 2, 15000);
     $("rgb-fb").hidden = false;
     const url = rgbUrl;
     rgbStop();
     rgbUrl = null;
     rgbStart(url);
   }, 1000);
+
+  // Terug naar het tabblad: meteen een verse stream in plaats van wachten
+  // op de watchdog hierboven.
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden || !rgbUrl) return;
+    if (Date.now() - rgbFrameAt <= 4000) return;
+    const url = rgbUrl;
+    rgbStop();
+    rgbUrl = null;
+    rgbStart(url);
+  });
 
   $("rgb-reload").addEventListener("click", () => {
     if (!rgbUrl) return;
@@ -967,20 +1336,53 @@
     rgbStart(url);
   });
 
-  $("new-flight").addEventListener("click", async () => {
-    if (!window.confirm("Nieuwe vlucht starten? De huidige vlucht wordt "
-        + "opgeslagen en alle live-data wordt gereset.")) return;
+  // ---------- vlucht starten/stoppen ----------
+  function resetFlightUi() {
+    expandedKey = null;
+    lastFiresKey = null;
+    lastLogKey = null;
+    currentFires = [];
+  }
+
+  async function startFlight() {
+    const input = $("flight-name");
+    const knop = $("start-flight");
+    const naam = input.value.trim();
+    knop.disabled = true;
     try {
-      const response = await fetch("/api/new-flight", { method: "POST" });
+      const response = await fetch("/api/start-flight", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: naam }),
+      });
       if (!response.ok) throw new Error("HTTP " + response.status);
-      expandedKey = null;
-      lastFiresKey = null;
-      lastLogKey = null;
-      currentFires = [];
+      input.value = "";
+      resetFlightUi();
+      await tick();
+      requestAnimationFrame(layoutCameras);
+    } catch (err) {
+      window.alert("Vlucht starten mislukte.");
+    } finally {
+      knop.disabled = false;
+    }
+  }
+
+  async function stopFlight() {
+    if (!window.confirm("Vlucht stoppen? De logs worden opgeslagen.")) return;
+    try {
+      const response = await fetch("/api/stop-flight", { method: "POST" });
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      resetFlightUi();
       await tick();
     } catch (err) {
-      window.alert("Nieuwe vlucht starten mislukte.");
+      window.alert("Vlucht stoppen mislukte.");
     }
+  }
+
+  $("start-flight").addEventListener("click", startFlight);
+  $("stop-flight").addEventListener("click", stopFlight);
+  $("flight-name").addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") startFlight();
   });
 
   // ---------- telemetry ----------
@@ -988,8 +1390,12 @@
 
   function gpsText(d) {
     const parts = [];
-    if (d.fc_fix != null) parts.push(FIX_LABELS[d.fc_fix] || String(d.fc_fix));
-    if (d.fc_sats != null) parts.push(d.fc_sats + " sat");
+    // -1 = "onbekend" uit de firmware; dat is geen fix en geen satelliet,
+    // dus tonen we "—" in plaats van "-1 sat".
+    if (d.fc_fix != null && d.fc_fix >= 0) {
+      parts.push(FIX_LABELS[d.fc_fix] || String(d.fc_fix));
+    }
+    if (d.fc_sats != null && d.fc_sats >= 0) parts.push(d.fc_sats + " sat");
     if (d.fc_hdop != null) parts.push(Number(d.fc_hdop).toFixed(1) + " hdop");
     // Oude positie: wel zichtbaar, maar er komen geen coördinaten meer uit.
     if (d.gps_age_s != null && d.gps_age_s >= 2) {
@@ -1150,9 +1556,9 @@
 
         const reasons = f.reasons || {};
         const reasonDefs = [
-          ["stijging", "stijging_boven_omgeving"],
-          ["absoluut warm", "absoluut_warm_genoeg"],
-          ["groot genoeg", "groot_genoeg"],
+          ["sprong boven omgeving", "sprong_boven_omgeving"],
+          ["heet in absolute zin", "absoluut_heet"],
+          ["geen sensorruis", "geen_ruis"],
         ];
         const reasonBox = el("div", "reasons");
         for (const [label, field] of reasonDefs) {
@@ -1224,20 +1630,26 @@
   // ---------- poll ----------
   async function tick() {
     try {
-      const [state, frame] = await Promise.all([
-        fetch("/api/state", { cache: "no-store" }).then((r) => r.json()),
-        fetch("/api/frame", { cache: "no-store" }).then((r) => r.json()),
-      ]);
+      const state = await fetch("/api/state", { cache: "no-store" })
+        .then((r) => r.json());
 
       currentFires = state.fires || [];
       lastThermal = state.thermal;
+      thermalFault = state.thermal_fault || null;
 
+      renderFlight(state);
       renderStatus(state);
-      drawThermal(frame.cells, state.thermal, frame.seq, frame.t);
       rgbStart(state.rgb_url);
       renderTelemetry(state);
-      renderFires(currentFires);
-      renderLogs(state);
+      // Branden en logboek hoeven niet bij elke tik: dat is veel DOM-werk en
+      // laat een open kaart knipperen. Telemetrie, GPS en waarschuwingen
+      // (waar de vertraging in zit) verversen 3x per seconde.
+      const nu = Date.now();
+      if (nu - lastSlowRender >= 900) {
+        lastSlowRender = nu;
+        renderFires(currentFires);
+        renderLogs(state);
+      }
     } catch (err) {
       const el = $("status");
       el.className = "status stale";
@@ -1245,10 +1657,11 @@
     }
   }
 
-  // Het warmtebeeld ververst op de ESP32 op 8 Hz; de staat, branden en
-  // het logboek 1x per seconde. Deze lus haalt alleen /api/frame op, ruim
-  // zes keer per seconde, en plant zichzelf pas opnieuw in als het vorige
-  // verzoek klaar is: trage antwoorden stapelen niet op.
+  // Het warmtebeeld ververst op de ESP32 op 16 Hz; deze lus haalt
+  // /api/frame ruim zes keer per seconde op en plant zichzelf pas opnieuw
+  // in als het vorige verzoek klaar is: trage antwoorden stapelen niet op.
+  // De staat (/api/state) volgt op 300 ms, zodat GPS, fix en
+  // waarschuwingen niet een seconde achterlopen op de werkelijkheid.
   async function thermalTick() {
     try {
       const frame = await fetch("/api/frame", { cache: "no-store" })
@@ -1260,7 +1673,7 @@
 
   layoutCameras();
   requestAnimationFrame(layoutCameras);
-  setInterval(tick, 1000);
+  setInterval(tick, 300);
   tick();
   thermalTick();
 })();

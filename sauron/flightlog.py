@@ -6,11 +6,11 @@ Achteraf lees je het bestand regel voor regel, of je opent het in een
 editor/script. De webserver kan het ook downloaden via /api/flights.
 
 Regeltypen:
-- flight_start  {flight, config}
+- flight_start  {flight, config}            (flight bevat ook de vluchtnaam)
 - log           {message}
 - ingest        {drone, thermal, hotspots, fires, warning} (+ cells bij --capture)
 - fire_new / fire_lost / fire_reacquired / fire_archived {fire}
-- flight_end    {reason}
+- flight_end    {reason, flight}             (zelfde flight-blok als de start)
 
 `fire` bevat altijd de volledige laatste detectie (temperatuur, score,
 coördinaten, reasons) plus id, first_seen, last_seen en observations.
@@ -27,6 +27,14 @@ from pathlib import Path
 from .config import DEFAULT
 
 _NAME_RE = re.compile(r"flight-\d{8}-\d{6}(?:-\d+)?\.jsonl\Z")
+
+
+def vluchtnaam(name):
+    """Leesbare vluchtnaam; leeg of ontbrekend wordt None."""
+    if name is None:
+        return None
+    naam = " ".join(str(name).split())
+    return naam[:80] or None
 
 
 class FlightRecorder:
@@ -47,8 +55,8 @@ class FlightRecorder:
     def flight(self):
         return dict(self._flight) if self._flight else None
 
-    def start(self):
-        """Sluit een eventueel open vlucht en begin een nieuwe."""
+    def start(self, name=None):
+        """Sluit een eventueel open vlucht en begin een nieuwe met naam."""
         with self._lock:
             self._close_locked("nieuwe vlucht")
             self.directory.mkdir(parents=True, exist_ok=True)
@@ -65,6 +73,10 @@ class FlightRecorder:
                 "id": path.stem[len("flight-"):],
                 "file": str(path),
                 "started": time.time(),
+                # De naam die de operator vooraf invult; staat in
+                # flight_start en flight_end zodat het bestand zichzelf
+                # uitlegt zonder de bestandsnaam te hoeven ontcijferen.
+                "name": vluchtnaam(name),
             }
             self._write_locked({
                 "type": "flight_start",
@@ -89,7 +101,8 @@ class FlightRecorder:
     def _close_locked(self, reason):
         if self._fh is None:
             return
-        self._write_locked({"type": "flight_end", "reason": reason})
+        self._write_locked({"type": "flight_end", "reason": reason,
+                            "flight": dict(self._flight) if self._flight else None})
         self._fh.close()
         self._fh = None
 

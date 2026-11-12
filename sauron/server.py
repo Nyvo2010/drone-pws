@@ -9,7 +9,9 @@ Routes:
 - GET  /api/state         JSON-snapshot (drone, branden, logs, vlucht)
 - GET  /api/frame         thermisch frame voor het canvas (768 floats)
 - POST /api/ingest        naad voor de ESP32/FC-forwarder
-- POST /api/new-flight    sluit de huidige vlucht af en reset alle data
+- POST /api/start-flight  start een gelogde vlucht (body: {"name": "..."})
+- POST /api/stop-flight   sluit de vlucht af en bewaart het logbestand
+- POST /api/new-flight    oude naam voor start-flight (API-compatibel)
 - GET  /api/flights       lijst met lokale vluchtbestanden (JSONL)
 - GET  /api/flights/<f>   download één vluchtbestand
 
@@ -32,7 +34,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote
 
-from . import autonomy, gps_nmea, pipeline, thermal
+from . import autonomy, geo, gps_nmea, pipeline, thermal
 from .config import DEFAULT
 from .state import State
 from .tracking import FireTracker
@@ -89,9 +91,17 @@ def _event_text(event):
         if brand.get("hotspot_lat") is None:
             return "nieuwe brand %s: %.1f C (locatie onbekend)" % (
                 label, brand["max_temp"])
-        return "nieuwe brand %s: %.1f C op %.6f, %.6f" % (
+        afstand = brand.get("afstand_m")
+        if afstand is None:
+            return "nieuwe brand %s: %.1f C op %.6f, %.6f" % (
+                label, brand["max_temp"],
+                brand["hotspot_lat"], brand["hotspot_lon"])
+        # Afstand ernaast: zo zie je meteen of een "brand" pal onder de
+        # drone ligt terwijl het vuur meters verderop is (verkeerde GPS of
+        # heading), in plaats van pas op de kaart achteraf.
+        return "nieuwe brand %s: %.1f C op %.6f, %.6f (%.1f m van de drone)" % (
             label, brand["max_temp"],
-            brand["hotspot_lat"], brand["hotspot_lon"])
+            brand["hotspot_lat"], brand["hotspot_lon"], afstand)
     if event["type"] == "lost":
         return "brand %s uit beeld (laatst %.1f C om %s)" % (
             label, brand["max_temp"], _clock(brand["last_seen"]))
@@ -121,13 +131,22 @@ class App:
         # meestuurt). Per vlucht weer leeg.
         self._launch_alt = None
         self._launch_alt_vast = None  # via --launch-alt; blijft over vluchten
+        # AGL uit GPS-hoogte: mediaan + laagste gezien = grond. Zonder dit
+        # maakte GPS-ruis van 3.9 m lanceerpunt 0..-6 m AGL, en dan krijgt
+        # geen enkele brand coördinaten.
+        self._height = geo.HeightReference(cfg)
         self._frame_seq = 0           # loopt op bij elke ingest (zie frame_seq)
         self._herhalingen = 0      # frames die identiek waren aan de vorige
+        self._herhaling_log_at = 0.0  # laatste melding over een identiek frame
         self._warned = set()       # waarschuwingen die maar één keer loggen
         self._mislukt = 0          # aantal afgewezen POSTs
         self._laatste_melding = 0.0
         self.state.log_listener = self._on_log
-        self._begin_flight()
+        # Nog geen vlucht: het dashboard toont eerst het startscherm met de
+        # systeemstatus. Data (ESP32) stroomt al binnen, maar er wordt pas
+        # gelogd zodra de operator een vlucht start.
+        self._reset_data()
+        self.state.add_log("dashboard gestart — nog geen vlucht actief")
 
     # -- vlucht -----------------------------------------------------------
     def _on_log(self, bericht, tijd):
@@ -141,25 +160,34 @@ class App:
         """Log + record tracker-events. Alleen aanroepen met de lock vast."""
         for event in events:
             self.state.add_log(_event_text(event))
-            if self.recorder is not None:
+            if self.recorder is not None and self.state.flight_active:
                 self.recorder.record({
                     "type": "fire_" + event["type"],
                     "fire": event["fire"],
                 }, t=now)
 
-    def _begin_flight(self):
-        """Reset state + tracker en open (indien aanwezig) een nieuw bestand."""
+    def _reset_data(self):
+        """Leeg alle live-data (tracker + state), zonder een vlucht te openen."""
         self.tracker.reset()
         self.state.reset()
         self._frame_seq = 0
         self._herhalingen = 0
+        self._herhaling_log_at = 0.0
         self._launch_alt = self._launch_alt_vast
+        self._height.reset(self._launch_alt_vast)
         self._warned = set()
         self._mislukt = 0
         self._laatste_melding = 0.0
+
+    def _begin_flight(self, name=None):
+        """Reset state + tracker en open (indien aanwezig) een nieuw bestand."""
+        self._reset_data()
         if self.recorder is not None:
-            self.state.flight = self.recorder.start()
-        self.state.add_log("vlucht gestart")
+            self.state.flight = self.recorder.start(name)
+        self.state.flight_active = True
+        naam = (self.state.flight or {}).get("name")
+        self.state.add_log("vlucht gestart: " + naam if naam
+                           else "vlucht gestart")
 
     def set_launch_alt(self, alt_msl):
         """Lanceerhoogte (MSL) alvast zetten.
@@ -170,15 +198,61 @@ class App:
         with self._lock:
             self._launch_alt_vast = alt_msl
             self._launch_alt = alt_msl
+            self._height.set_ground(alt_msl)
 
-    def new_flight(self):
-        """Sluit de huidige vlucht af, reset alles en start een nieuwe."""
+    def note_link(self, link=None, drone=None):
+        """Link- en GPS-signalen bijwerken als er (nog) geen warmtebeeld is.
+
+        De firmware kan een kapotte MLX90640 hebben terwijl WiFi, GPS en de
+        RGB-stream gewoon werken. Zonder deze route bleef het dashboard
+        "niet verbonden" zeggen en was de GPS onzichtbaar, ook al antwoordde
+        /api/gps elke keer. Er wordt geen frame verzonnen: `last_frame`
+        blijft leeg, dus het warmtebeeld blijft eerlijk "geen frame".
+        """
         with self._lock:
-            if self.recorder is not None:
-                self.recorder.end("nieuwe vlucht")
-            self._begin_flight()
+            st = self.state
+            for sleutel, attribuut in (("lat", "drone_lat"),
+                                       ("lon", "drone_lon"),
+                                       ("alt_msl", "alt_msl"),
+                                       ("heading_deg", "heading_deg"),
+                                       ("fix", "fc_fix"),
+                                       ("sats", "fc_sats"),
+                                       ("hdop", "fc_hdop"),
+                                       ("age_s", "gps_age_s")):
+                if drone and drone.get(sleutel) is not None:
+                    setattr(st, attribuut, drone[sleutel])
+            if link is not None:
+                st.link = dict(link)
+            st.last_update = time.time()
+            self._stale = False
+        self._note_once(
+            "link-zonder-frame",
+            "link leeft (WiFi + GPS), maar de warmtecamera levert geen frames",
+        )
+
+    def start_flight(self, name=None):
+        """Start een gelogde vlucht met naam en reset alle live-data."""
+        with self._lock:
+            self._begin_flight(name)
             self._stale = False
             return self.state.flight
+
+    def new_flight(self, name=None):
+        """Oude naam voor start_flight (blijft voor bestaande clients werken)."""
+        return self.start_flight(name)
+
+    def stop_flight(self):
+        """Sluit de vlucht af, bewaar het logbestand en reset alle live-data."""
+        with self._lock:
+            vlucht = dict(self.state.flight) if self.state.flight else None
+            naam = (vlucht or {}).get("name")
+            if self.recorder is not None:
+                self.recorder.end("vlucht gestopt")
+            self._reset_data()
+            self.state.add_log("vlucht gestopt: " + naam if naam
+                               else "vlucht gestopt")
+            self._stale = False
+            return vlucht
 
     def close(self):
         """Sta de watchdog en de recorder netjes stil (server stopt)."""
@@ -307,6 +381,8 @@ class App:
                     )
 
         launch = self._launch_alt
+        if launch is not None:
+            self._height.set_ground(launch)
         if launch is None:
             # Is er nog steeds niets, dan melden we de brand zonder
             # coördinaten in plaats van de hele frame te weigeren.
@@ -339,11 +415,15 @@ class App:
         # NaN/tekst/verkeerde lengte).
         frame = thermal.sanitize_frame(frame, self.cfg)
         positie_leeftijd = drone.get("age_s")
+        # Hoogte boven de grond uit een ruizige GPS-hoogte (mediaan +
+        # laagste gezien = grond). De ruwe MSL-waarden gaan mee voor het
+        # vluchtbestand, maar de geometrie rekent met deze AGL.
+        agl = self._height.update(drone["alt_msl"])
         resultaat = pipeline.detect_event(
             frame, drone["lat"], drone["lon"], drone["heading_deg"],
             drone["alt_msl"], gps_alt_launch,
             gps_fix=drone.get("fix"), position_age_s=positie_leeftijd,
-            cfg=self.cfg,
+            agl_m=agl, cfg=self.cfg,
         )
 
         with self._lock:
@@ -356,8 +436,14 @@ class App:
                 self._herhalingen += 1
                 tracked = self.tracker.snapshot(now)
                 events = []
-                if (self._herhalingen in (1, 20)
-                        or self._herhalingen % 100 == 0):
+                # Een vastgelopen sensor levert vier identieke frames per
+                # seconde; log dus niet bij elke reeks opnieuw. Eerste keer,
+                # daarna pas bij 20/100/500 en hooguit één keer per 30 s.
+                if ((self._herhalingen == 1
+                     and now - self._herhaling_log_at >= 30.0)
+                        or self._herhalingen in (20, 100)
+                        or self._herhalingen % 500 == 0):
+                    self._herhaling_log_at = now
                     self.state.add_log(
                         "identiek frame (%d×): telt niet als nieuwe meting"
                         % self._herhalingen)
@@ -391,6 +477,13 @@ class App:
             waarschuwingen = [w for w in (resultaat["height_warning"],
                                           resultaat.get("location_warning"),
                                           resultaat.get("sensor_warning")) if w]
+            # Een sensor die hetzelfde frame blijft herhalen is vastgelopen
+            # of kapot. Zeg dat tegen de operator: zonder deze regel ziet hij
+            # een rustig beeld en denkt hij dat het veld koud is.
+            if self._herhalingen >= 10:
+                waarschuwingen.append(
+                    "warmtecamera levert een vastgelopen frame (%d× identiek)"
+                    % self._herhalingen)
             waarschuwing = " · ".join(waarschuwingen) or None
             if waarschuwing != st.warning:
                 if waarschuwing:
@@ -425,7 +518,7 @@ class App:
             if st.autonomy_enabled:
                 st.autonomy_advice = autonomy.suggest_action(st)
 
-            if self.recorder is not None:
+            if self.recorder is not None and self.state.flight_active:
                 regel = {
                     "type": "ingest",
                     "seq": seq,
@@ -451,6 +544,7 @@ class App:
                         "n_suspects": len(verdacht),
                     },
                     "agl_m": resultaat["agl_m"],
+                    "ground_alt_msl": self._height.ground,
                     "height_warning": resultaat["height_warning"],
                     "location_warning": resultaat.get("location_warning"),
                     "sensor_warning": resultaat.get("sensor_warning"),
@@ -547,6 +641,16 @@ def make_handler(app):
             else:
                 self.send_error(404, "onbekend pad")
 
+        def _json_body(self):
+            """Optionele JSON-body; leeg telt als {}."""
+            lengte = int(self.headers.get("Content-Length", 0) or 0)
+            if lengte <= 0:
+                return {}
+            body = json.loads(self.rfile.read(lengte).decode("utf-8"))
+            if not isinstance(body, dict):
+                raise ValueError("body moet een JSON-object zijn")
+            return body
+
         def do_POST(self):
             if self.path == "/api/ingest":
                 try:
@@ -566,13 +670,22 @@ def make_handler(app):
                                  "n_suspects": resultaat.get("n_suspects", 0),
                                  "seq": resultaat.get("seq"),
                                  "fires": resultaat["fires"]})
-            elif self.path == "/api/new-flight":
+            elif self.path in ("/api/start-flight", "/api/new-flight"):
                 try:
-                    vlucht = app.new_flight()
-                except OSError as fout:
-                    self.send_error(500, "nieuwe vlucht mislukt: %s" % fout)
+                    naam = self._json_body().get("name")
+                    vlucht = app.start_flight(naam)
+                except (ValueError, TypeError) as fout:
+                    self.send_error(400, "ongeldige vluchtnaam: %s" % fout)
                     return
-                self._send_json({"ok": True, "flight": vlucht})
+                except OSError as fout:
+                    self.send_error(500, "vlucht starten mislukt: %s" % fout)
+                    return
+                self._send_json({"ok": True, "flight": vlucht,
+                                 "flight_active": True})
+            elif self.path == "/api/stop-flight":
+                vlucht = app.stop_flight()
+                self._send_json({"ok": True, "flight": vlucht,
+                                 "flight_active": False})
             else:
                 self.send_error(404, "POST-pad niet gevonden")
 

@@ -80,9 +80,24 @@ def _location_blocker(lat, lon, agl, gps_fix, position_age_s=None,
     return None
 
 
+def _locatie_pixel(brand):
+    """Kijkrichting van een brand: centroid (stabiel) of heetste cel.
+
+    De heetste cel verspringt bij een vlam makkelijk een paar cellen
+    tussen twee frames; op 15 m AGL is dat meters. Het centroid van de
+    hele blob is dezelfde brand met minder ruis, dus die gebruiken we
+    voor de coördinaten (de UI markeert nog steeds de heetste cel).
+    """
+    x = brand.get("centroid_x")
+    y = brand.get("centroid_y")
+    if x is None or y is None:
+        return brand["x"], brand["y"]
+    return x, y
+
+
 def detect_event(frame, drone_lat, drone_lon, heading_deg,
                  gps_alt_now, gps_alt_launch, gps_fix=None,
-                 position_age_s=None, cfg=DEFAULT):
+                 position_age_s=None, agl_m=None, cfg=DEFAULT):
     """Verwerk één meetmoment. Retourneert een plat dict (JSON-klaar).
 
     - 'fires' bevat alleen geclassificeerde branden, elk verrijkt met
@@ -93,16 +108,23 @@ def detect_event(frame, drone_lat, drone_lon, heading_deg,
     - 'location_warning' legt uit waarom coördinaten ontbreken.
     - Ontbrekende hoogte (gps_alt_now/launch None) is geen crash: AGL
       wordt None en de brand komt zonder locatie in de lijst.
+    - `agl_m` overschrijft de ruwe GPS-berekening: de server geeft hier
+      de gedempte hoogte boven de grond uit `geo.HeightReference`, omdat
+      GPS-hoogte enkele meters ruist en AGL daar direct van afhangt.
     """
     ambient, problemen = thermal.assess_frame(frame, cfg)
     _, threshold, hotspots = thermal.find_hotspots(frame, cfg)
 
-    if gps_alt_now is None or gps_alt_launch is None:
+    if agl_m is not None:
+        agl = float(agl_m)
+    elif gps_alt_now is None or gps_alt_launch is None:
         agl = None
     else:
         agl = geo.agl_from_gps(gps_alt_now, gps_alt_launch)
 
     heading = 0.0 if heading_deg is None else float(heading_deg)
+    # Montage-offset van de warmtecamera t.o.v. het kompas (config).
+    heading = (heading + cfg.heading_offset_deg) % 360.0
 
     beoordeeld = [
         {**hotspot, **classify.classify_hotspot(hotspot, ambient, cfg)}
@@ -118,12 +140,11 @@ def detect_event(frame, drone_lat, drone_lon, heading_deg,
             brand.update({"hotspot_lat": None, "hotspot_lon": None,
                           "afstand_m": None})
             continue
-        # Pixel van de heetste cel bepaalt de kijkrichting (centroid is
-        # voor grote branden stabieler, maar de heetste pixel is de
-        # interessantste plek voor de operator).
+        # Centroid bepaalt de kijkrichting: stabieler dan de heetste cel
+        # en bij een grote brand precies het midden van het vuur.
+        x, y = _locatie_pixel(brand)
         brand.update(geo.locate_hotspot(
-            drone_lat, drone_lon, heading, agl,
-            brand["x"], brand["y"], cfg,
+            drone_lat, drone_lon, heading, agl, x, y, cfg,
         ))
 
     return {

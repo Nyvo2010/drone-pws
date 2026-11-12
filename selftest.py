@@ -22,11 +22,13 @@ Exit 0 = alles ok, exit 1 = er is iets stuk.
 
 import argparse
 import json
+import socket
 import sys
 import tempfile
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -77,6 +79,7 @@ def test_thermische_keten():
     with tempfile.TemporaryDirectory() as logmap:
         recorder = FlightRecorder(logmap)
         app = App(recorder=recorder)
+        app.start_flight("zelftest")
         httpd = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(app))
         poort = httpd.server_address[1]
         draad = threading.Thread(target=httpd.serve_forever, daemon=True)
@@ -136,6 +139,10 @@ def test_thermische_keten():
                       "types: %s" % sorted(set(types)))
                 check("fire_new" in types, "brand weggeschreven",
                       "types: %s" % sorted(set(types)))
+                naam = next((r.get("flight", {}).get("name") for r in regels
+                             if r.get("type") == "flight_start"), None)
+                check(naam == "zelftest", "vluchtnaam in het bestand",
+                      str(naam))
         finally:
             httpd.shutdown()
             httpd.server_close()
@@ -247,12 +254,175 @@ def test_esp32_data(base_url):
     finally:
         app.close()
 
+    # Deze firmware heeft géén /capture (alleen /api/* en :81/stream): een
+    # stilstaand beeld bestaat hier niet. Dat is een eigenschap van de build,
+    # geen storing, dus melden als overgeslagen in plaats van als fout --
+    # anders faalt de zelftest altijd op iets wat niet te repareren is.
     jpeg = client.capture()
-    check(jpeg is not None, "/capture levert een JPEG")
     if jpeg:
         maat = esp32.jpeg_size(jpeg)
-        print("       RGB: %s, %d bytes"
+        check(True, "/capture levert een JPEG",
+              "%s, %d bytes"
               % (("%dx%d" % maat) if maat else "onbekend formaat", len(jpeg)))
+    else:
+        print("       [--] /capture niet ondersteund door deze firmware "
+              "(geen stilstaand beeld; RGB loopt via de stream op :81)")
+
+
+def _stream_meten(url, seconden=3.0):
+    """Lees de MJPEG-stream `seconden` lang: (fps, bytes/s, hoogste gat ms).
+
+    Geeft (None, None, reden) als de stream niet te openen is. Bewust kort
+    en met een eigen socket: de firmware heeft één stream-slot, dus dit is
+    dezelfde weg als de browser neemt.
+    """
+    delen = urllib.parse.urlsplit(url)
+    host = delen.hostname or "192.168.4.1"
+    poort = delen.port or 81
+    try:
+        sock = socket.create_connection((host, poort), 2.0)
+    except OSError as fout:
+        return None, None, str(fout)
+    sock.settimeout(2.0)
+    frames = []
+    totaal = 0
+    try:
+        sock.sendall(("GET /stream HTTP/1.1\r\nHost: %s\r\n"
+                      "Connection: close\r\n\r\n" % host).encode())
+        buf = b""
+        start = time.monotonic()
+        while time.monotonic() - start < seconden:
+            try:
+                blok = sock.recv(65536)
+            except socket.timeout:
+                break
+            if not blok:
+                break
+            buf += blok
+            while True:
+                kop = buf.find(b"Content-Length: ")
+                if kop < 0:
+                    break
+                eind = buf.find(b"\r\n", kop)
+                try:
+                    lengte = int(buf[kop + 16:eind])
+                except ValueError:
+                    break
+                begin = buf.find(b"\r\n\r\n", eind)
+                if begin < 0 or len(buf) < begin + 4 + lengte:
+                    break
+                buf = buf[begin + 4 + lengte:]
+                frames.append(time.monotonic())
+                totaal += lengte
+    finally:
+        sock.close()
+    if len(frames) < 2:
+        return None, None, "geen frames"
+    duur = frames[-1] - frames[0]
+    gaten = [(frames[i + 1] - frames[i]) * 1000.0
+             for i in range(len(frames) - 1)]
+    return (len(frames) - 1) / duur, totaal / duur, max(gaten)
+
+
+def test_link(base_url):
+    """Meet ALLE signalen apart: latentie, warmtebeeld, GPS-UART, RGB, WiFi.
+
+    De camera werkt in de praktijk vaak wel terwijl de GPS stil is of de
+    warmtecamera leesfouten geeft. Deze check noemt elk signaal apart, met
+    cijfers, zodat een storing niet als "geen data" eindigt.
+    """
+    print("\n== link: alle signalen ==")
+    client = esp32.Esp32(base_url, timeout=2.0, read_timeout=4.0)
+    if not client.bereikbaar():
+        print("[--] overgeslagen: ESP32 niet bereikbaar op %s" % base_url)
+        return
+
+    # 1. Latentie van /api/data, in hetzelfde tempo als het dashboard.
+    latenties = []
+    gelukt = 0
+    laatste = None
+    for _ in range(12):
+        begin = time.monotonic()
+        data = client.data()
+        latenties.append((time.monotonic() - begin) * 1000.0)
+        if data is not None:
+            gelukt += 1
+            laatste = data
+        time.sleep(0.2)
+    latenties.sort()
+    check(gelukt == len(latenties), "12 polls op /api/data",
+          "%d/12 ok, mediaan %.0f ms, p95 %.0f ms, max %.0f ms"
+          % (gelukt, latenties[len(latenties) // 2],
+             latenties[int(len(latenties) * 0.95) - 1], latenties[-1]))
+    if laatste is None:
+        return
+
+    # 2. Warmtebeeld: aanwezig, 768 waarden, plausibel bereik.
+    frame = laatste.get("frame")
+    if frame is None:
+        melding = str((laatste.get("thermal") or {}).get("status") or "")
+        check(False, "warmtebeeld in /api/data",
+              "frame=null (thermal_available=%s%s)"
+              % (laatste.get("thermal_available"),
+                 ", " + melding if melding else ""))
+    else:
+        if isinstance(frame[0], (list, tuple)):
+            waarden = [v for rij in frame for v in rij if v is not None]
+        else:
+            waarden = [v for v in frame if v is not None]
+        check(len(waarden) == 768, "warmtebeeld heeft 768 waarden",
+              "%d waarden" % len(waarden))
+        if waarden:
+            print("       bereik %.1f .. %.1f C, mediaan %.1f C, %d dode pixels"
+                  % (min(waarden), max(waarden),
+                     sorted(waarden)[len(waarden) // 2], 768 - len(waarden)))
+
+    # 3. GPS-UART: een stille UART is een kabel/stroomfout, geen "geen fix".
+    voor = (client.api_status() or {}).get("gps") or {}
+    time.sleep(3)
+    status = client.api_status() or {}
+    gps = status.get("gps") or {}
+    bytes_delta = int(gps.get("bytes_seen") or 0) - \
+        int(voor.get("bytes_seen") or 0)
+    check(bytes_delta > 0, "GPS-UART levert bytes",
+          "%d bytes in 3 s, UBX-berichten %s, checksumfouten %s"
+          % (bytes_delta, gps.get("ubx_messages"),
+             gps.get("checksum_failures")))
+    print("       fix %s, %s satellieten, HDOP %s, baud %s"
+          % (gps.get("fix_type"), gps.get("satellites"),
+             (client.gps() or {}).get("hdop"), gps.get("baud")))
+    uptime = (status.get("stream") or {}).get("last_frame_at_ms")
+    if isinstance(uptime, int) and uptime < 60000:
+        print("       [--] bord pas %d s op: na een herstart beginnen de "
+              "GPS-bytes weer bij 0" % (uptime // 1000))
+    if bytes_delta > 0 and not gps.get("location_valid"):
+        print("       [--] nog geen fix: binnen of geen vrij zicht op de lucht")
+
+    # 4. RGB-stream: fps en bytes/s zoals de browser hem ziet.
+    fps, bytes_sek, gat = _stream_meten(esp32.stream_url(base_url))
+    if fps is None:
+        # De firmware serveert één stream-client (de handlerlus stopt pas bij
+        # een send-fout). Telt het bord wél frames, dan houdt een andere tab
+        # of app het slot bezet -- dat is de waarschijnlijke oorzaak, niet
+        # een netwerkstoring. Zeg dat erbij.
+        stream = status.get("stream") or {}
+        frames = stream.get("frames_sent") or 0
+        extra = ""
+        if frames:
+            extra = ("; frames_sent=%s: het enige stream-slot is bezet door "
+                     "een andere client (tab op 192.168.4.1 of :81) -- sluit "
+                     "die en herhaal de test" % frames)
+        check(False, "MJPEG-stream op :81 leesbaar", "%s%s" % (gat, extra))
+    else:
+        check(True, "MJPEG-stream",
+              "%.1f fps, %.0f kB/s, hoogste gat %.0f ms"
+              % (fps, (bytes_sek or 0) / 1024.0, gat))
+
+    # 5. WiFi: de AP meldt de RSSI van deze laptop.
+    wifi = status.get("wifi") or {}
+    check(True, "WiFi-signaal", "%s (%s dBm, %s%%), %s client(s)"
+          % (wifi.get("quality"), wifi.get("rssi_dbm"),
+             wifi.get("signal_percent"), wifi.get("clients")))
 
 
 def test_esp32(base_url):
@@ -325,6 +495,7 @@ def main():
     test_thermische_keten()
     test_nmea_keten()
     test_esp32(args.esp32_url)
+    test_link(args.esp32_url)
 
     print("\n%s" % ("ALLE CHECKS OK" if mislukt == 0
                     else "%d CHECK(S) MISLUKT" % mislukt))
